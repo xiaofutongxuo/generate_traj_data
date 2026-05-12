@@ -1,0 +1,43 @@
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Local packaged runtime dependencies
+.runtime/
+
+# Generated inference and visualization outputs
+output/*
+!output/cluster_frenet_kmedoids.py
+visualizations/
+
+# GUI/user-local state
+gt_viewer_state/
+.trajectory_gui_state.json
+
+# K-Means generated data and plots
+k_means/future_trajectories_xy.txt
+k_means/*_trajectories_xy.txt
+k_means/*_clusters_xy.png
+k_means/kmeans_results.txt
+k_means/kmeans_stop_results.txt
+
+# Logs and local OS/editor noise
+*.log
+*.tmp
+.DS_Store
+.idea/
+.vscode/

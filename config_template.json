@@ -1,0 +1,37 @@
+{
+  "model": {
+    "model_path": "/home/tsingyu/lxh/models/Alpamayo-1.5-10B",
+    "traj_checkpoint": null,
+    "lora_adapter": null,
+    "dtype": "bfloat16"
+  },
+  "data": {
+    "train_data_root": "/home/tsingyu/train_data",
+    "calibration_dir": "/home/tsingyu/yzb/triplane_tokenization/cailibration",
+    "num_history_steps": 16,
+    "num_future_steps": 64,
+    "num_frames": 4,
+    "target_image_hw": [1280, 1920],
+    "heading_num_steps": 5,
+    "min_heading_displacement_m": 0.2,
+    "time_step": 0.1
+  },
+  "inference": {
+    "num_traj_samples": 6,
+    "num_traj_sets": 1,
+    "top_p": 0.98,
+    "top_k": null,
+    "temperature": 0.6,
+    "max_vlm_generation_tokens": 256,
+    "use_cot": true,
+    "batch_size": 2,
+    "candidate_stride": 3
+  },
+  "output": {
+    "output_dir": "./output",
+    "vis_output_dir": "./visualizations",
+    "num_vis_samples": 10,
+    "vis_camera": "FC",
+    "vis_save_images": true
+  }
+}
