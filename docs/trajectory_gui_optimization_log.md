@@ -288,3 +288,193 @@
   - GT 优化/停车添加的确认按钮仍位于 `GT Speed Profile` 下方。
 - 验证方式：
   - 已通过项目 venv 的 Python 静态编译检查。
+
+## 018 Enhanced GUI 架构拆分
+
+- 日期：2026-05-12
+- 需求：`trajectory_gui_enhanced.py` 接近 6000 行，后续开发维护困难，需要按功能拆分为更清晰的包结构，同时保持现有命令和行为不变。
+- 改动文件：`trajectory_gui_enhanced.py`、`traj_gui_enhanced/`、`README.md`
+- 主要改动：
+  - 新增 `traj_gui_enhanced/` 包，将常量、运行环境设置、纯轨迹/速度/投影/聚类工具函数拆入独立模块。
+  - 将 `TrajectoryViewerEnhanced` 拆为主 `viewer.py` 和多个 `mixins/` 功能模块，覆盖样本 I/O、界面布局、导航、手工编辑、聚类中心、GT 控制、速度控制、BEV 绘制、相机绘制和速度图绘制。
+  - `trajectory_gui_enhanced.py` 改为兼容入口，继续支持原有 `python trajectory_gui_enhanced.py ...` 启动方式，并 re-export `TrajectoryViewerEnhanced`、`parse_args`、`main`。
+  - 新增 `tests/test_gui_helpers.py`，用标准库 `unittest` 覆盖关键纯函数，避免新增 pytest 依赖。
+- 当前行为：
+  - 本次为零行为变更重构；CLI 参数、GUI 文案、快捷键、parquet schema 和保存逻辑保持不变。
+  - 为支持无 tkinter 的最小环境执行 `--help` 和 import 检查，Tk/ImageTk 改为 GUI 实例化时懒加载。
+  - 若系统 Python 未安装 `tkinter`，会优先尝试使用项目本地 `.runtime/tk` 中的 Python 3.10 Tk runtime。
+- 验证方式：
+  - 已通过项目 venv 的 `unittest` helper 测试。
+  - 已通过项目 venv 的 Python 静态编译检查。
+  - 已验证 `trajectory_gui_enhanced.py --help` 和新旧 import 入口。
+  - 已用 `timeout` 启动真实 GUI，确认进入 Tk mainloop 后由 timeout 正常终止。
+
+## 019 现有速度面板叠加历史速度
+
+- 日期：2026-05-13
+- 需求：不要新增独立 history 速度窗口；在现有 `Diversity Speed Profile` 和 `GT Speed Profile` 中加入历史轨迹速度，横轴从历史负帧延伸到未来帧，例如 `-15..63`，并在当前帧 `0` 画垂直虚线。
+- 改动文件：`traj_gui_enhanced/speed_utils.py`、`traj_gui_enhanced/constants.py`、`traj_gui_enhanced/mixins/speed_controls.py`、`traj_gui_enhanced/mixins/draw_speed.py`、`traj_gui_enhanced/mixins/draw_bev.py`、`traj_gui_enhanced/mixins/draw_camera.py`、`tests/test_gui_helpers.py`
+- 主要改动：
+  - 新增 `_history_speed_profile_from_xyz()`，使用 history 相邻点差分计算历史速度，避免把 history 点相对原点的距离误当速度。
+  - 两个现有速度图都叠加绿色 history 曲线；future 曲线保持原有颜色。
+  - 速度图横轴改为 history 负帧到 future 正帧，并在 `F0` 位置绘制垂直虚线。
+  - hover 到负帧时映射到 history source，并在 BEV 历史轨迹上高亮对应历史点；hover 到非负帧时保持原有 pred/GT 高亮。
+- 当前行为：
+  - history 16 帧显示为 `F-15..F0`，future 64 帧显示为 `F0..F63`。
+  - `Diversity Speed Profile` 用绿色 history + 当前选中生成/扩充轨迹未来速度。
+  - `GT Speed Profile` 用绿色 history + GT future 速度。
+- 验证方式：
+  - 已通过项目 venv 的 `unittest` helper 测试。
+  - 已通过项目 venv 的 Python 静态编译检查。
+
+## 020 扩充轨迹 staged delete 与撤销
+
+- 日期：2026-05-13
+- 需求：删除扩充轨迹时，先只从 GUI 可视化中消失，原始 parquet 数据保留；如果误删，可通过撤销删除恢复；只有确认保存后才真正从 output parquet 中删除相关数据。
+- 改动文件：`traj_gui_enhanced/trajectory_identity.py`、`traj_gui_enhanced/mixins/delete_controls.py`、`traj_gui_enhanced/viewer.py`、`traj_gui_enhanced/mixins/navigation.py`、`traj_gui_enhanced/mixins/widget_layout.py`、`traj_gui_enhanced/mixins/sample_io.py`、`traj_gui_enhanced/mixins/draw_bev.py`、`traj_gui_enhanced/mixins/draw_camera.py`、`traj_gui_enhanced/mixins/manual_events.py`、`traj_gui_enhanced/mixins/manual_editing.py`、`traj_gui_enhanced/mixins/cluster_controls.py`、`traj_gui_enhanced/mixins/speed_controls.py`、`tests/test_gui_helpers.py`
+- 主要改动：
+  - 新增 `trajectory_identity.py`，集中维护 source 规范化、GT 保护、`(t0_us, sample_idx)` 轨迹 key 和 parquet 行删除过滤逻辑。
+  - 新增 `DeleteControlsMixin`，集中维护 pending delete 集合、撤销栈、可见轨迹列表和 listbox 行到真实轨迹 index 的映射。
+  - `Delete/Backspace` 现在会将当前非 GT 轨迹加入 pending delete，并立即从右侧列表、BEV 和相机投影中隐藏。
+  - 新增 `Undo Delete` 按钮，恢复最近一次 pending delete 的轨迹。
+  - `Confirm Save (Ctrl+S)` 根据 pending delete key 真正从 active parquet 中删除对应行；保存前切换样本会提示先保存或撤销。
+  - 若删除轨迹匹配当前手工 Bezier 控制点，控制点会先在内存中 staged 隐藏；撤销删除恢复，确认保存后同步写回 `manual_points.json`。
+  - `Save Curve Traj` 追加行写入 `source=manual_bezier`；`Confirm Save` cluster center 追加行写入 `source=cluster_center`。
+- 当前行为：
+  - GT 行仍受保护，不能删除。
+  - 删除后的轨迹在保存前只是 GUI 内隐藏，撤销删除可恢复显示。
+  - 保存后重新打开同一 t0，已确认删除的轨迹不再出现。
+  - 匹配当前手工 Bezier 曲线的删除会在确认保存后同步清理 `manual_points.json` 中对应控制点。
+- 验证方式：
+  - 已通过项目 venv 的 `unittest` helper 测试。
+  - 已通过项目 venv 的 Python 静态编译检查。
+
+## 021 视频帧逐帧 t0 索引与 GUI 覆盖率
+
+- 日期：2026-05-13
+- 需求：完整数据所有帧已明确为所有 10Hz 视频帧，不能再被旧的 30 帧候选扫描和 `candidate_stride` 漏掉；GUI 也需要能浏览每个视频帧，并标出哪些帧还没有生成轨迹。
+- 改动文件：`frame_index.py`、`run_inference.py`、`data_loader.py`、`traj_gui_enhanced/cli.py`、`traj_gui_enhanced/viewer.py`、`traj_gui_enhanced/mixins/sample_io.py`、`traj_gui_enhanced/mixins/widget_layout.py`、`traj_gui_enhanced/mixins/speed_controls.py`、`traj_gui_enhanced/mixins/draw_bev.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 新增 `frame_index.py`，统一从 `data-timestamps/{clip}.timestamps.parquet` 读取主视频帧时间戳，并生成逐帧 `t0_us`。
+  - `run_inference.py` 默认改为 `--t0_source video_frames --frame_stride 1`，按视频帧逐帧生成；旧稀疏速度候选模式保留为 `--t0_source speed_candidates`。
+  - GUI 默认改为 `--index_mode video_frames --frame_stride 1`，不再只依赖 output parquet 中已有的 `t0_us`。
+  - GUI 状态栏新增 clip 覆盖率：`Video t0: N | Generated t0: M | Missing: K | Current: generated/no generated`。
+  - 如果当前视频帧没有生成轨迹，GUI 仍显示图像、真实 history、GT，右侧轨迹列表为空。
+  - `load_data()` 新增 history/future valid mask；录制开头真实历史帧不足时，history 速度和 BEV 历史轨迹不绘制外推出来的历史段。
+- 当前行为：
+  - 默认推理和默认 GUI 都按主视频帧逐帧工作。
+  - `--candidate_stride` 只对旧 `speed_candidates` 模式生效。
+  - `--index_mode generated` 可回到只浏览已生成 output t0 的旧 GUI 行为。
+- 后续注意：
+  - 当前只完成代码级接入和轻量验证，还需要用真实推理输出进一步检查。
+  - 建议先用小 clip 或 `--max_samples` 运行 `run_inference.py --t0_source video_frames --frame_stride 1`，再打开 GUI 连续翻帧，确认 output 覆盖率、t0 顺序、无轨迹帧显示和开头无 history 的显示都符合预期。
+- 验证方式：
+  - 已通过新增 helper 测试，覆盖视频帧索引、GUI video-frame sample index、history valid mask。
+  - 已通过项目 venv 的 `unittest` helper 测试。
+
+## 022 output GT / 伪 GT 数据语义整理
+
+- 日期：2026-05-14
+- 需求：真实 GT 只应来自原始数据集 `/home/ubuntu/Public/train_data`；output parquet 应只保存 VLA 生成、manual Bezier、cluster center 等伪 GT，避免把 VLA 的 `sample_idx=0` 误判为 GT。
+- 改动文件：`run_inference.py`、`traj_gui_enhanced/trajectory_identity.py`、`traj_gui_enhanced/mixins/sample_io.py`、`traj_gui_enhanced/mixins/gt_controls.py`、`traj_gui_enhanced/constants.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - `run_inference.py` 新写入的 VLA 轨迹行增加 `source=vla`。
+  - GT 判断规则改为只认显式 `source=gt`，不再把 `source` 为空且 `sample_idx=0` 的 output 行自动当作 GT。
+  - GUI 读取 output 时过滤 legacy `source=gt` 行；这些行不进入右侧伪 GT 轨迹列表，也不计入 generated 覆盖率。
+  - 空 `source` 的旧 output 行按伪 GT 处理，用于兼容早期未写 source 的 VLA 输出。
+  - `AUTO_OPTIMIZE_GT_ON_LOAD` 改为 `False`，并停止在加载样本时自动把 GT 副本写回 output。
+  - `_write_gt_trajectory_to_parquet()` 改为提示真实 GT 来自原始数据集，不再写入 output parquet。
+- 当前行为：
+  - 真实 GT 用 `load_data()` 从原始数据集读取并显示。
+  - output parquet 是伪 GT 数据容器，后续动力学约束优化将面向所有非 `source=gt` output 行。
+  - 已存在于磁盘上的 legacy `source=gt` 行不会被本次代码自动删除；若需要物理清理，应另做带备份的迁移工具。
+- 验证方式：
+  - 已新增并通过身份规则测试：空 source + `sample_idx=0` 不再是 GT，`source=vla` 可删除/可编辑。
+  - 已新增并通过 output 覆盖率测试：`source=gt` 行不计入 generated t0。
+
+## 023 伪 GT dynamics 基础模块与保存前优化
+
+- 日期：2026-05-14
+- 需求：VLA 生成轨迹、manual Bezier、cluster center 以及人工修改后的非 GT 轨迹都可能存在速度、加速度或曲率不合理的问题，需要先建立独立的动力学约束模块，并在伪 GT 写入 output 前统一优化和重算字段。
+- 改动文件：`traj_gui_enhanced/dynamics/`、`run_inference.py`、`traj_gui_enhanced/mixins/sample_io.py`、`traj_gui_enhanced/mixins/manual_editing.py`、`traj_gui_enhanced/mixins/speed_controls.py`、`tests/test_gui_helpers.py`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 新增 `traj_gui_enhanced/dynamics/limits.py`，集中定义伪 GT 速度、单步位移、加速度、jerk、曲率等约束阈值。
+  - 新增 `metrics.py` / `diagnostics.py` / `optimizer.py`，提供轨迹动力学指标、违规诊断、保守平滑与加速度限制重采样。
+  - 新增 `trajectory_components_from_xyz()`，统一从 xyz 重算 `vx/vy/vz/qx/qy/qz/qw/curvature`，避免 GUI 和推理脚本各自维护一套字段生成逻辑。
+  - `run_inference.py` 保存 VLA 轨迹前会先调用 `optimize_pseudo_gt_trajectory()`，并写入优化后的伪 GT 字段。
+  - `Save Curve Traj` 和 cluster `Confirm Save` 追加轨迹前会走同一套 dynamics 优化。
+  - 已保存非 GT 轨迹通过速度编辑保存回 parquet 前，会再次进行 dynamics 优化并更新内存和 parquet 中的对应行。
+- 当前行为：
+  - 真实 GT 仍只从原始数据集读取，dynamics 保存前优化只面向非 GT output 行。
+  - 若轨迹无法完全满足全部阈值，优化器会返回当前评分最好的保守结果；后续 GUI 直接几何编辑时还需要补充更明确的提示/接受/取消流程。
+  - 本次尚未实现“直接拖拽已保存轨迹几何点/终点并写回原行”的完整交互，只完成底层模块和已有保存路径接入。
+- 验证方式：
+  - 已新增并通过 dynamics 单元测试：异常轨迹可被标记为速度/步长/加速度/曲率违规；尖刺轨迹优化后曲率下降且端点保持。
+  - 已新增并通过保存路径测试：非 GT 轨迹写回 parquet 前会先优化，保存后的曲率低于保存前。
+
+## 024 已保存伪 GT 的 BEV 关键帧几何编辑第一版
+
+- 日期：2026-05-14
+- 需求：在 GUI 中不仅能优化速度曲线，还要能直接修改已经保存到 output 的非 GT 伪 GT 轨迹几何形状；修改后整条轨迹需要经过动力学优化，并能接受、取消或恢复原状。
+- 改动文件：`traj_gui_enhanced/dynamics/editing.py`、`traj_gui_enhanced/mixins/saved_traj_editing.py`、`traj_gui_enhanced/viewer.py`、`traj_gui_enhanced/mixins/manual_events.py`、`traj_gui_enhanced/mixins/draw_bev.py`、`traj_gui_enhanced/mixins/widget_layout.py`、`traj_gui_enhanced/mixins/navigation.py`、`traj_gui_enhanced/mixins/sample_io.py`、`tests/test_gui_helpers.py`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 新增 `editable_trajectory_keyframes()`，默认每 8 帧取一个 BEV 编辑手柄，并包含最后一帧 endpoint。
+  - 新增 `deform_trajectory_by_keyframe_drag()`，拖动某个关键帧时按帧距离做局部平滑形变，同时锁住第一帧，避免起点突然跳动。
+  - 新增 `SavedTrajectoryEditingMixin`，维护已保存非 GT 轨迹的几何编辑状态、原始轨迹备份、dirty 状态、保存/取消/恢复逻辑。
+  - GUI 新增 `Edit Traj`、`Save Edit`、`Cancel Edit`、`Restore Edit` 按钮。
+  - 进入 `Edit Traj` 后，BEV 上会给当前选中非 GT 轨迹绘制关键帧手柄；左键拖动手柄会局部形变轨迹，并立即调用 dynamics 优化和字段重算。
+  - `Save Edit` 写回当前 parquet 原行；`Cancel Edit` 放弃内存修改；`Restore Edit` 将当前编辑恢复到进入编辑时的原始轨迹。
+  - 切换样本、切换轨迹或 `Ctrl+S` 全局保存时，如果存在未处理的几何编辑，会提示先保存或取消。
+- 当前行为：
+  - 真实 GT 仍不可作为 output 伪 GT 编辑。
+  - 编辑入口只面向当前选中且未 pending delete 的非 GT output 轨迹。
+  - 这是第一版 BEV 几何编辑，后续需要真实 GUI 操作检查手柄间隔、影响半径、优化强度和按钮布局。
+- 验证方式：
+  - 已新增并通过 keyframe/局部形变纯函数测试。
+  - 已新增并通过 mixin 状态测试：进入编辑、拖动 endpoint、重算字段、取消恢复原始轨迹。
+
+## 025 伪 GT 几何编辑状态保护与保存闭环
+
+- 日期：2026-05-14
+- 需求：TODO-004 的几何编辑已经接入后，还需要防止未保存编辑状态与删除、速度编辑、切换样本/轨迹等操作交叉，避免内存状态和 parquet 写回混乱。
+- 改动文件：`traj_gui_enhanced/mixins/delete_controls.py`、`traj_gui_enhanced/mixins/saved_traj_editing.py`、`traj_gui_enhanced/mixins/speed_controls.py`、`tests/test_gui_helpers.py`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 几何编辑 active 时，`Delete/Backspace` 和 staged delete 会被阻止。
+  - 几何编辑 active 时，不能启动伪 GT 速度编辑。
+  - 几何编辑 active 时，不能再次启动另一个 `Edit Traj` 覆盖当前编辑状态。
+  - 已有导航和全局保存保护继续保留：切换样本、切换轨迹、`Ctrl+S` 前会提示先保存或取消几何编辑。
+  - 补充 `Save Edit` 闭环测试，确认保存会调用 parquet 写回路径、清理编辑状态并重新加载当前样本。
+- 当前行为：
+  - TODO-004 的代码闭环已经完成：非 GT 轨迹可编辑、编辑后走 dynamics 优化、可保存写回原 parquet 行、可取消和恢复原状，并有未保存状态保护。
+  - 后续主要是用真实 GUI 做手感验收和参数调优。
+- 验证方式：
+  - 已新增并通过删除保护、二次编辑保护、速度编辑保护、`Save Edit` 写回状态测试。
+
+## 026 逐帧索引 future 连续性过滤启动卡顿修复
+
+- 日期：2026-05-14
+- 问题：TODO-001 后续补充的“当前帧 + 未来 6.4s egomotion 连续性过滤”功能正确，但初版实现对每个 `t0_us` 都重复排序全 dataset timestamp，并逐点循环判断覆盖，导致 GUI 默认 `video_frames` 模式启动前长时间卡在样本索引构建。
+- 改动文件：`data_loader.py`、`tests/test_gui_helpers.py`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 新增 `_sorted_unique_timestamps()` 和 `_coverage_mask_for_sorted_timestamps()`，把 timestamp 排序去重和覆盖判断拆开。
+  - `filter_t0s_with_full_future()` 改为一次性构造 `t0 + [0..64] * 0.1s` 的矩阵，并用 `np.searchsorted()` 向量化判断所有当前帧和 future 帧覆盖情况。
+  - 保留原有语义：小缺口 `<=0.3s` 插值，大缺口和最后尾部 future 不足时过滤。
+  - 增加大索引性能回归测试，防止后续又退回逐 t0 慢循环。
+- 验证方式：
+  - `test_full_future_filter_large_index_is_vectorized` 初版失败于约 2.96s，向量化后同组测试 0.06s 通过。
+  - 本机实测 `/home/ubuntu/Public/train_data` 全量 302 个 clip、约 17.2 万个候选 t0 的连续性过滤约 0.87s。
+  - 用真实 GUI 命令短启动，已能输出 `Video-frame sample index: 170962 samples ...` 并进入 Tk 主循环。
+
+## 027 History 轨迹显示层平滑去噪
+
+- 日期：2026-05-14
+- 需求：此前 GT future 速度已经做显示平滑，但 history 轨迹和 history 速度直接使用原始 `ego_history_xyz` 差分，原始 egomotion 噪声会造成绿色 history 线和当前速度估计出现尖刺。
+- 改动文件：`traj_gui_enhanced/speed_utils.py`、`traj_gui_enhanced/mixins/speed_controls.py`、`traj_gui_enhanced/mixins/manual_editing.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`、`docs/trajectory_gui_user_manual.html`
+- 主要改动：
+  - 新增 `_smooth_history_xyz_for_display()`：对 history 点做轻量 binomial 平滑，保持第一帧和当前帧不动。
+  - 新增 `_smoothed_history_speed_profile_from_xyz()`：先使用平滑后的 history 点计算速度，再做轻量显示平滑。
+  - GUI 的绿色 history 速度线、BEV history 轨迹、hover 高亮点都使用显示层平滑后的 history。
+  - 手工 Bezier 当前速度估计使用有效 history mask 和显示层平滑后的尾部点，降低原始 history 噪声对手工轨迹初速度的影响。
+  - 原始 `ego_history_xyz` 不写回、不覆盖，仍保留为 source data。
+- 验证方式：
+  - 新增测试覆盖 history 平滑保持当前帧、降低中间噪声、降低 history 差分速度尖刺，并确认 GUI 取 display-smoothed history 时不会修改 `conv_data` 中的原始 history。

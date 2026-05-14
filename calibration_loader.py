@@ -8,11 +8,21 @@ directory and provides utilities for projecting 3D trajectories onto 2D images.
 import json
 from pathlib import Path
 from typing import Any, Optional
+import xml.etree.ElementTree as ET
 
 import numpy as np
 
 
 CAMERA_NAMES = ["FC", "FC_FAR", "FL", "FR", "RC", "RL", "RR"]
+LOCAL_CAMERA_DIR_TO_NAME = {
+    "fc120": "FC",
+    "fc30": "FC_FAR",
+    "fl": "FL",
+    "fr": "FR",
+    "rc": "RC",
+    "rl": "RL",
+    "rr": "RR",
+}
 
 
 class CameraCalibration:
@@ -137,10 +147,116 @@ class CameraCalibration:
         return valid_depth & in_bounds
 
 
+def _read_opencv_matrix(xml_path: Path, tag_name: str) -> np.ndarray:
+    root = ET.parse(xml_path).getroot()
+    node = root.find(tag_name)
+    if node is None:
+        raise ValueError(f"Missing {tag_name} in {xml_path}")
+    rows = int(node.findtext("rows", "0"))
+    cols = int(node.findtext("cols", "0"))
+    data_text = node.findtext("data", "")
+    values = np.fromstring(data_text, sep=" ", dtype=np.float64)
+    if rows <= 0 or cols <= 0 or values.size != rows * cols:
+        raise ValueError(f"Invalid {tag_name} matrix in {xml_path}")
+    return values.reshape(rows, cols)
+
+
+def _scale_intrinsics_to_target_image(
+    intrinsic: np.ndarray,
+    target_image_hw: tuple[int, int],
+) -> tuple[np.ndarray, int, int]:
+    target_h, target_w = int(target_image_hw[0]), int(target_image_hw[1])
+    scaled = np.asarray(intrinsic, dtype=np.float64).copy()
+
+    # The front cameras are commonly calibrated at 3840x2160 while the GUI
+    # loads/resizes frames to its target size. Side/rear camera XML is already
+    # close to the target image size, so only apply this known high-res case.
+    if scaled[0, 2] > target_w * 0.75 and scaled[1, 2] > target_h * 0.75:
+        scale_x = target_w / 3840.0
+        scale_y = target_h / 2160.0
+        scaled[0, 0] *= scale_x
+        scaled[0, 2] *= scale_x
+        scaled[1, 1] *= scale_y
+        scaled[1, 2] *= scale_y
+
+    return scaled, target_w, target_h
+
+
+def _load_local_xml_calibration_dir(
+    local_calibration_dir: Path,
+    target_image_hw: tuple[int, int] = (1080, 1920),
+) -> dict[str, CameraCalibration]:
+    calibrations: dict[str, CameraCalibration] = {}
+    for camera_dir_name, camera_name in LOCAL_CAMERA_DIR_TO_NAME.items():
+        camera_dir = local_calibration_dir / camera_dir_name
+        intrinsic_file = camera_dir / "cameraIntrinsic.xml"
+        extrinsic_file = camera_dir / "cameraExtrinsic.xml"
+        if not intrinsic_file.exists() or not extrinsic_file.exists():
+            continue
+
+        intrinsic = _read_opencv_matrix(intrinsic_file, "camIntrinsicMat")
+        intrinsic, img_width, img_height = _scale_intrinsics_to_target_image(
+            intrinsic,
+            target_image_hw,
+        )
+        try:
+            dist_coeffs = _read_opencv_matrix(
+                intrinsic_file,
+                "distortion_coefficients",
+            ).reshape(-1).tolist()
+        except ValueError:
+            dist_coeffs = [0.0] * 8
+
+        extrinsic = _read_opencv_matrix(extrinsic_file, "extrinsicMatrix")
+        if extrinsic.shape == (4, 4):
+            T_bev_to_camera = extrinsic[:3, :4].copy()
+        elif extrinsic.shape == (3, 4):
+            T_bev_to_camera = extrinsic.copy()
+        else:
+            raise ValueError(f"Unsupported extrinsic shape {extrinsic.shape} in {extrinsic_file}")
+
+        if np.nanmax(np.abs(T_bev_to_camera[:, 3])) > 100.0:
+            T_bev_to_camera[:, 3] *= 0.001
+
+        calibrations[camera_name] = CameraCalibration(
+            camera_name=camera_name,
+            fx=float(intrinsic[0, 0]),
+            fy=float(intrinsic[1, 1]),
+            cx=float(intrinsic[0, 2]),
+            cy=float(intrinsic[1, 2]),
+            distortion_coeffs=dist_coeffs,
+            T_bev_to_camera=T_bev_to_camera,
+            image_width=img_width,
+            image_height=img_height,
+            distortion_model="opencv_rational_8",
+        )
+
+    if not calibrations:
+        raise FileNotFoundError(f"No local XML calibration cameras found in {local_calibration_dir}")
+    return calibrations
+
+
+def _local_calibration_dir_candidates(data_root: str, dataset_name: str) -> list[Path]:
+    root = Path(data_root)
+    names = [dataset_name]
+    if dataset_name.endswith("_converted"):
+        names.append(dataset_name.removesuffix("_converted"))
+    else:
+        names.append(f"{dataset_name}_converted")
+
+    candidates = []
+    for name in dict.fromkeys(names):
+        candidates.append(root / name / "calibration")
+    candidates.append(root / "calibration")
+    return candidates
+
+
 def load_calibration_for_segment(
     calibration_dir: str,
     dataset_name: str,
     segment_name: str,
+    data_root: Optional[str] = None,
+    target_image_hw: tuple[int, int] = (1080, 1920),
 ) -> dict[str, CameraCalibration]:
     """Load calibration for a specific segment.
 
@@ -148,10 +264,23 @@ def load_calibration_for_segment(
         calibration_dir: Directory containing calibration JSONL files
         dataset_name: Dataset name (e.g., 'data_26_3_24_1')
         segment_name: Segment name (e.g., '2026-03-24-12-06-59')
+        data_root: Optional raw data root containing per-dataset calibration XML
+        target_image_hw: Target image size used when local XML intrinsics need scaling
 
     Returns:
         Dictionary mapping camera names to CameraCalibration objects
     """
+    if data_root:
+        for local_calibration_dir in _local_calibration_dir_candidates(data_root, dataset_name):
+            if local_calibration_dir.exists():
+                try:
+                    return _load_local_xml_calibration_dir(
+                        local_calibration_dir,
+                        target_image_hw=target_image_hw,
+                    )
+                except Exception:
+                    break
+
     calib_dataset_name = dataset_name
     calib_file = Path(calibration_dir) / f"{calib_dataset_name}_roll_only_3d_raw_distorted_extrinsics.jsonl"
     if not calib_file.exists() and dataset_name.endswith("_converted"):

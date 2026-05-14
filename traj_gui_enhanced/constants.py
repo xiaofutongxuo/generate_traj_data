@@ -1,0 +1,57 @@
+"""Constants for the enhanced trajectory GUI."""
+
+CAMERA_IDX_TO_NAME = {0: "FL", 1: "FC", 2: "FR", 3: "RL", 4: "RC", 5: "RR"}
+CAMERA_NAME_TO_IDX = {v: k for k, v in CAMERA_IDX_TO_NAME.items()}
+
+# Trajectory colors (RGB)
+TRAJ_COLORS = [
+    (231, 76, 60),    # Red
+    (52, 152, 219),   # Blue
+    (155, 89, 182),   # Purple
+    (243, 156, 18),  # Orange
+    (26, 188, 156),   # Teal
+    (233, 30, 99),    # Pink
+]
+
+GT_COLOR_RGB = (255, 221, 87)
+GT_COLOR_HEX = "#ffdd57"
+HISTORY_SPEED_COLOR_HEX = "#2ecc71"
+MANUAL_TRAJ_COLOR_RGB = (0, 212, 255)
+MANUAL_TRAJ_COLOR_HEX = "#00d4ff"
+CLUSTER_TRAJ_COLOR_RGB = (255, 170, 0)
+CLUSTER_TRAJ_COLOR_HEX = "#ffaa00"
+FUTURE_TRAJ_STEPS = 64
+TRAJ_DT_SECONDS = 0.1
+CLUSTER_ENDPOINT_HIT_RADIUS_PX = 18
+CLUSTER_DRAG_ACCELERATION_WEIGHT = 1.0
+CLUSTER_DRAG_CURVATURE_WEIGHT = 80.0
+CLUSTER_DRAG_DEVIATION_WEIGHT = 0.03
+CLUSTER_CURVATURE_SMOOTH_PASSES = 4
+TRAJ_ACCEL_MIN_MPS2 = -6.0
+TRAJ_ACCEL_MAX_MPS2 = 2.0
+TRAJ_ACCEL_LIMIT_MARGIN_MPS2 = 0.01
+TRAJ_MAX_STEP_SPEED_MPS = 15.0
+TRAJ_MAX_POSITION_STEP_M = TRAJ_MAX_STEP_SPEED_MPS * TRAJ_DT_SECONDS
+STOP_SPEED_THRESHOLD_MPS = 0.1
+STOP_MIN_FRAMES = 5
+STOP_MARKER_RADIUS_PX = 5
+HOVER_FRAME_COLOR_RGB = (46, 255, 139)
+HOVER_FRAME_COLOR_HEX = "#2eff8b"
+SPEED_UNSMOOTH_ACCEL_MPS2 = 12.0
+SPEED_UNSMOOTH_JERK_MPS3 = 80.0
+SPEED_GT_DIFF_TOLERANCE_MPS = 3.0
+SPEED_EDIT_LOCAL_RADIUS_FRAMES = 4
+SPEED_EDIT_MIN_MPS = 0.0
+SPEED_EDIT_MAX_MPS = TRAJ_MAX_STEP_SPEED_MPS
+CLUSTER_CATEGORY_FILES = {
+    "left": "left.txt",
+    "right": "right.txt",
+    "s_curve": "s_curve.txt",
+    "straight": "straight.txt",
+    "stop": "stop.txt",
+}
+CLUSTER_CATEGORY_ORDER = ["stop", "straight", "left", "right", "s_curve"]
+AUTO_OPTIMIZE_GT_ON_LOAD = False
+GT_SPEED_OPTIMIZED_COLUMN = "gt_speed_auto_optimized"
+
+__all__ = [name for name in globals() if name.isupper()]

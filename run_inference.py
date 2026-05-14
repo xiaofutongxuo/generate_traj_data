@@ -26,12 +26,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import Config, ModelConfig, DataConfig, InferenceConfig, OutputConfig
 from model_loader import load_alpamayo_model, get_processor, build_inference_inputs
 from data_loader import (
+    filter_t0s_with_full_future,
     get_dataset_names,
     get_clip_stems_from_dataset,
     load_data,
     to_device,
     get_t0_candidates,
 )
+from frame_index import build_video_frame_t0_candidates
 from calibration_loader import (
     load_calibration_for_segment,
     CameraCalibration,
@@ -42,6 +44,7 @@ from visualization import (
     create_trajectory_grid_visualization,
     draw_trajectory_on_image,
 )
+from traj_gui_enhanced.dynamics import optimize_pseudo_gt_trajectory, trajectory_components_from_xyz
 
 
 MODEL_CAMERA_ORDER = ["FL", "FC", "FR", "RL", "RC", "RR", "FC_FAR"]
@@ -115,6 +118,22 @@ def parse_args():
     parser.add_argument(
         "--candidate_stride", type=int, default=3,
         help="Process every Nth valid t0 candidate"
+    )
+    parser.add_argument(
+        "--t0_source", type=str, default="video_frames",
+        choices=["speed_candidates", "video_frames"],
+        help=(
+            "Source of t0 frames. speed_candidates keeps the legacy sparse "
+            "speed-filtered candidates; video_frames uses master video timestamps."
+        ),
+    )
+    parser.add_argument(
+        "--frame_stride", type=int, default=1,
+        help="Video-frame stride when --t0_source video_frames is used",
+    )
+    parser.add_argument(
+        "--no_speed_filter", action="store_true",
+        help="Disable min-speed filtering for legacy speed_candidates mode",
     )
     parser.add_argument(
         "--max_generation_tokens", type=int, default=None,
@@ -245,43 +264,26 @@ def save_trajectory_results(
             num_samples = pred_trajs.shape[2]
             num_steps = pred_trajs.shape[3]
             for sample_idx in range(num_samples):
-                traj_xyz = pred_trajs[0, 0, sample_idx]  # [num_steps, 3]
-
-                vx_list, vy_list, vz_list = [], [], []
-                yaws = []
-                for step in range(len(traj_xyz)):
-                    if step == 0:
-                        vx, vy, vz = 0.0, 0.0, 0.0
-                    else:
-                        dx = traj_xyz[step, 0] - traj_xyz[step-1, 0]
-                        dy = traj_xyz[step, 1] - traj_xyz[step-1, 1]
-                        dz = traj_xyz[step, 2] - traj_xyz[step-1, 2]
-                        vx, vy, vz = dx / 0.1, dy / 0.1, dz / 0.1
-                    vx_list.append(float(vx))
-                    vy_list.append(float(vy))
-                    vz_list.append(float(vz))
-                    yaw = float(np.arctan2(vy, vx)) if (vx != 0 or vy != 0) else 0.0
-                    yaws.append(yaw)
-
-                yaws_arr = np.array(yaws)
-                qw = np.cos(yaws_arr / 2)
-                qz = np.sin(yaws_arr / 2)
+                traj_xyz = np.asarray(pred_trajs[0, 0, sample_idx], dtype=np.float64)  # [num_steps, 3]
+                optimization = optimize_pseudo_gt_trajectory(traj_xyz)
+                components = trajectory_components_from_xyz(optimization.xyz)
 
                 rows.append({
                     "t0_us": t0_us,
                     "sample_idx": sample_idx,
+                    "source": "vla",
                     "timestamp": [t0_us + int((i + 1) * 100000) for i in range(num_steps)],
-                    "qx": [0.0] * num_steps,
-                    "qy": [0.0] * num_steps,
-                    "qz": qz.tolist(),
-                    "qw": qw.tolist(),
-                    "x": traj_xyz[:, 0].tolist(),
-                    "y": traj_xyz[:, 1].tolist(),
-                    "z": traj_xyz[:, 2].tolist(),
-                    "vx": vx_list,
-                    "vy": vy_list,
-                    "vz": vz_list,
-                    "curvature": np.gradient(yaws_arr).tolist(),
+                    "qx": components["qx"].tolist(),
+                    "qy": components["qy"].tolist(),
+                    "qz": components["qz"].tolist(),
+                    "qw": components["qw"].tolist(),
+                    "x": components["x"].tolist(),
+                    "y": components["y"].tolist(),
+                    "z": components["z"].tolist(),
+                    "vx": components["vx"].tolist(),
+                    "vy": components["vy"].tolist(),
+                    "vz": components["vz"].tolist(),
+                    "curvature": components["curvature"].tolist(),
                 })
 
         df = pd.DataFrame(rows)
@@ -728,7 +730,12 @@ def main():
     print(f"Num trajectory samples: {config.inference.num_traj_samples}")
     print(f"CoT enabled: {config.inference.use_cot}")
     print(f"Batch size: {config.inference.batch_size}")
-    print(f"Candidate stride: every {config.inference.candidate_stride} valid t0")
+    if args.t0_source == "video_frames":
+        print(f"t0 source: every video frame (frame_stride={max(1, int(args.frame_stride))})")
+    else:
+        speed_filter = "off" if args.no_speed_filter else f">= {args.min_speed_mps:.2f} m/s"
+        print(f"t0 source: speed candidates (speed filter {speed_filter})")
+        print(f"Candidate stride: every {config.inference.candidate_stride} valid t0")
     print(f"Max VLM generation tokens: {config.inference.max_vlm_generation_tokens}")
     print()
 
@@ -765,31 +772,37 @@ def main():
 
     print(f"\n[3/5] Loading calibrations...")
     all_calibrations = {}
+    local_calibration_roots = [Path(config.data.train_data_root)]
+    raw_calibration_root = Path(os.environ.get("RAW_TRAIN_DATA_ROOT", "/home/ubuntu/Public/train_data"))
+    if raw_calibration_root.exists() and raw_calibration_root not in local_calibration_roots:
+        local_calibration_roots.append(raw_calibration_root)
     for dataset_name in datasets:
-        dataset_calib_dir = Path(config.data.calibration_dir)
-        
-        # Find calibration file - match dataset without '_converted' suffix
-        calib_prefix = dataset_name.replace('_converted', '')
-        calib_pattern = f"{calib_prefix}*.jsonl"
-        
-        for calib_file in dataset_calib_dir.glob(calib_pattern):
-            calib_dataset = calib_file.stem.replace("_roll_only_3d_raw_distorted_extrinsics", "")
-            print(f"  Found calibration file for {dataset_name}: {calib_file.name}")
-            
-            for dataset_name_inner, clip_stem in all_clips:
-                if dataset_name_inner == dataset_name:
-                    try:
-                        calibs = load_calibration_for_segment(
-                            config.data.calibration_dir,
-                            calib_dataset,
-                            clip_stem,
-                        )
-                        all_calibrations[(dataset_name, clip_stem)] = calibs
-                    except Exception as e:
-                        print(f"Warning: Could not load calibration for {clip_stem}: {e}")
-            break
+        calib_dataset = dataset_name.replace('_converted', '')
+        dataset_loaded = 0
+        for dataset_name_inner, clip_stem in all_clips:
+            if dataset_name_inner != dataset_name:
+                continue
+            last_error = None
+            for local_calibration_root in local_calibration_roots:
+                try:
+                    calibs = load_calibration_for_segment(
+                        config.data.calibration_dir,
+                        calib_dataset,
+                        clip_stem,
+                        data_root=str(local_calibration_root),
+                        target_image_hw=config.data.target_image_hw,
+                    )
+                    all_calibrations[(dataset_name, clip_stem)] = calibs
+                    dataset_loaded += 1
+                    break
+                except Exception as e:
+                    last_error = e
+            else:
+                print(f"Warning: Could not load calibration for {dataset_name}/{clip_stem}: {last_error}")
+        if dataset_loaded:
+            print(f"  Loaded calibration for {dataset_name}: {dataset_loaded} clips")
         else:
-            print(f"Warning: No calibration file found for {dataset_name} (pattern: {calib_pattern})")
+            print(f"Warning: No calibration loaded for {dataset_name}")
 
     print(f"Loaded calibrations for {len(all_calibrations)} clips")
 
@@ -850,15 +863,37 @@ def main():
         try:
             calibs = all_calibrations[(dataset_name, clip_stem)]
 
-            candidates = get_t0_candidates(
-                config.data.train_data_root,
-                dataset_name,
-                clip_stem,
-                min_speed_mps=args.min_speed_mps,
-            )
-
-            t0_values = [int(t0) for t0, _speed in candidates] if candidates else [None]
-            t0_values = t0_values[::config.inference.candidate_stride]
+            if args.t0_source == "video_frames":
+                video_candidates = build_video_frame_t0_candidates(
+                    config.data.train_data_root,
+                    dataset_name,
+                    clip_stem,
+                    frame_stride=args.frame_stride,
+                    num_history_steps=config.data.num_history_steps,
+                    num_future_steps=config.data.num_future_steps,
+                    require_full_history=False,
+                    require_full_future=False,
+                )
+                t0_values = [int(t0) for t0 in video_candidates.t0_values]
+                t0_values = filter_t0s_with_full_future(
+                    config.data.train_data_root,
+                    dataset_name,
+                    t0_values,
+                    num_future_steps=config.data.num_future_steps,
+                    time_step=config.data.time_step,
+                )
+                if not t0_values:
+                    print(f"Warning: no video-frame t0 timestamps for {dataset_name}/{clip_stem}")
+                    continue
+            else:
+                candidates = get_t0_candidates(
+                    config.data.train_data_root,
+                    dataset_name,
+                    clip_stem,
+                    min_speed_mps=-float("inf") if args.no_speed_filter else args.min_speed_mps,
+                )
+                t0_values = [int(t0) for t0, _speed in candidates] if candidates else [None]
+                t0_values = t0_values[::config.inference.candidate_stride]
 
             for t0_us in t0_values:
                 if args.max_samples > 0 and processed + len(pending_items) >= args.max_samples:
@@ -910,6 +945,9 @@ def main():
                 "use_cot": config.inference.use_cot,
                 "batch_size": config.inference.batch_size,
                 "candidate_stride": config.inference.candidate_stride,
+                "t0_source": args.t0_source,
+                "frame_stride": max(1, int(args.frame_stride)),
+                "no_speed_filter": bool(args.no_speed_filter),
             },
             "results": results,
         },

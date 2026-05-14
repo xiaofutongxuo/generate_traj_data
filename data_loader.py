@@ -7,6 +7,7 @@ converted video data in a format compatible with Alpamayo inference.
 
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
@@ -33,6 +34,7 @@ ALL_CAMERAS = ["FL", "FC", "FR", "RL", "RC", "RR"]
 GT_ACCEL_MIN_MPS2 = -6.0
 GT_ACCEL_MAX_MPS2 = 2.0
 GT_MAX_STEP_SPEED_MPS = 15.0
+DEFAULT_CONTINUITY_MAX_GAP_SECONDS = 0.3
 
 
 def _resize_frames(frames, target_hw: tuple[int, int]):
@@ -86,6 +88,117 @@ def _normalize_quat_xyzw(quat: np.ndarray) -> np.ndarray:
     norm = np.linalg.norm(quat, axis=-1, keepdims=True)
     norm = np.maximum(norm, 1e-8)
     return quat / norm
+
+
+@lru_cache(maxsize=16)
+def _load_dataset_egomotion_dataframe_cached(
+    data_root: str,
+    dataset_name: str,
+) -> pd.DataFrame:
+    """Load all egomotion rows for a dataset, sorted by global timestamp."""
+    egomotion_dir = Path(data_root) / dataset_name / "data-egomotion"
+    if not egomotion_dir.exists():
+        raise FileNotFoundError(f"Egomotion data not found: {egomotion_dir}")
+
+    frames = []
+    for ego_file in sorted(egomotion_dir.glob("*.egomotion.parquet")):
+        df = pd.read_parquet(ego_file)
+        if "timestamp" not in df.columns or len(df) == 0:
+            continue
+        df = df.copy()
+        df["_clip_stem"] = ego_file.name.replace(".egomotion.parquet", "")
+        frames.append(df)
+
+    if not frames:
+        raise FileNotFoundError(f"No egomotion parquet files found in {egomotion_dir}")
+
+    merged = pd.concat(frames, ignore_index=True)
+    merged = merged.sort_values("timestamp")
+    merged = merged.drop_duplicates(subset=["timestamp"], keep="first")
+    return merged.reset_index(drop=True)
+
+
+def _load_dataset_egomotion_dataframe(data_root: str | Path, dataset_name: str) -> pd.DataFrame:
+    return _load_dataset_egomotion_dataframe_cached(str(Path(data_root)), str(dataset_name)).copy()
+
+
+def _sorted_unique_timestamps(source_timestamps: np.ndarray) -> np.ndarray:
+    source = np.asarray(source_timestamps, dtype=np.int64).reshape(-1)
+    if len(source) == 0:
+        return source
+    return np.unique(np.sort(source))
+
+
+def _coverage_mask_for_sorted_timestamps(
+    source_timestamps_sorted: np.ndarray,
+    target_timestamps: np.ndarray,
+    max_gap_us: int,
+) -> np.ndarray:
+    source = np.asarray(source_timestamps_sorted, dtype=np.int64).reshape(-1)
+    target = np.asarray(target_timestamps, dtype=np.int64).reshape(-1)
+    if len(target) == 0:
+        return np.zeros(0, dtype=bool)
+    if len(source) == 0:
+        return np.zeros(len(target), dtype=bool)
+
+    insert_at = np.searchsorted(source, target, side="left")
+    covered = np.zeros(len(target), dtype=bool)
+
+    exact_idx = insert_at < len(source)
+    if exact_idx.any():
+        covered[exact_idx] = source[insert_at[exact_idx]] == target[exact_idx]
+
+    between_idx = (~covered) & (insert_at > 0) & (insert_at < len(source))
+    if between_idx.any():
+        left = source[insert_at[between_idx] - 1]
+        right = source[insert_at[between_idx]]
+        covered[between_idx] = (right - left) <= int(max_gap_us)
+    return covered
+
+
+def _coverage_mask_for_timestamps(
+    source_timestamps: np.ndarray,
+    target_timestamps: np.ndarray,
+    max_gap_seconds: float = DEFAULT_CONTINUITY_MAX_GAP_SECONDS,
+) -> np.ndarray:
+    """Return whether each target can be read directly or interpolated across a small gap."""
+    max_gap_us = int(round(float(max_gap_seconds) * 1_000_000))
+    return _coverage_mask_for_sorted_timestamps(
+        _sorted_unique_timestamps(source_timestamps),
+        target_timestamps,
+        max_gap_us,
+    )
+
+
+def filter_t0s_with_full_future(
+    data_root: str | Path,
+    dataset_name: str,
+    t0_values: list[int],
+    num_future_steps: int = 64,
+    time_step: float = 0.1,
+    max_gap_seconds: float = DEFAULT_CONTINUITY_MAX_GAP_SECONDS,
+) -> list[int]:
+    """Keep t0 values whose full future horizon is covered by continuous egomotion."""
+    if not t0_values:
+        return []
+    try:
+        df_ego = _load_dataset_egomotion_dataframe(data_root, dataset_name)
+    except Exception:
+        return []
+
+    source_ts = _sorted_unique_timestamps(df_ego["timestamp"].to_numpy(dtype=np.int64))
+    dt_us = int(round(float(time_step) * 1_000_000))
+    max_gap_us = int(round(float(max_gap_seconds) * 1_000_000))
+    t0_arr = np.asarray([int(t0) for t0 in t0_values], dtype=np.int64)
+    offsets = np.arange(0, int(num_future_steps) + 1, dtype=np.int64) * dt_us
+    target_ts = t0_arr[:, None] + offsets[None, :]
+    coverage = _coverage_mask_for_sorted_timestamps(
+        source_ts,
+        target_ts.reshape(-1),
+        max_gap_us,
+    ).reshape(target_ts.shape)
+    keep_mask = coverage.all(axis=1)
+    return [int(t0) for t0, keep in zip(t0_arr, keep_mask) if bool(keep)]
 
 
 def _interp_ego_at_timestamps(df, timestamps: np.ndarray):
@@ -466,7 +579,11 @@ def load_data(
     if not ts_file.exists():
         raise FileNotFoundError(f"Timestamp file not found: {ts_file}")
 
-    df_ego = pd.read_parquet(ego_file)
+    df_ego_current = pd.read_parquet(ego_file)
+    try:
+        df_ego = _load_dataset_egomotion_dataframe(data_root, dataset_name)
+    except Exception:
+        df_ego = df_ego_current
     df_master = pd.read_parquet(ts_file)
 
     master_ts = df_master["timestamp"].values
@@ -491,6 +608,13 @@ def load_data(
         [t0_abs + (i + 1) * dt_us for i in range(num_future_steps)],
         dtype=np.int64,
     )
+    source_ts = df_ego["timestamp"].to_numpy(dtype=np.int64)
+    current_valid_mask = _coverage_mask_for_timestamps(
+        source_ts,
+        np.array([t0_abs], dtype=np.int64),
+    )
+    history_valid_mask = _coverage_mask_for_timestamps(source_ts, history_ts)
+    future_valid_mask = _coverage_mask_for_timestamps(source_ts, future_ts)
 
     hist_xyz, hist_quat = _interp_ego_at_timestamps(df_ego, history_ts)
     fut_xyz, fut_quat = _interp_ego_at_timestamps(df_ego, future_ts)
@@ -597,16 +721,18 @@ def load_data(
         abs_ts = _stack_arrays(timestamps_list).astype(np.int64)
         rel_ts = (abs_ts - abs_ts.min()).astype(np.float32) * 1e-6
 
-    has_future_gt = bool(future_ts[-1] <= clip_end_us)
+    has_future_gt = bool(current_valid_mask.all() and future_valid_mask.all())
 
     return {
         "image_frames": image_frames,
         "camera_indices": cam_idx_t,
         "ego_history_xyz": _unsqueeze_twice(_array_from_numpy(ego_hist_xyz_local)),
         "ego_history_rot": _unsqueeze_twice(_array_from_numpy(ego_hist_rot_local)),
+        "ego_history_valid_mask": _unsqueeze_twice(_array_from_numpy(history_valid_mask.astype(bool))),
         "ego_future_xyz": _unsqueeze_twice(_array_from_numpy(ego_fut_xyz_local)),
         "ego_future_xyz_raw": _unsqueeze_twice(_array_from_numpy(ego_fut_xyz_local.copy())),
         "ego_future_xyz_repaired": _unsqueeze_twice(_array_from_numpy(ego_fut_xyz_repaired_local)),
+        "ego_future_valid_mask": _unsqueeze_twice(_array_from_numpy(future_valid_mask.astype(bool))),
         "ego_future_forward_acceleration": _unsqueeze_twice(_array_from_numpy(ego_fut_forward_acc)),
         "ego_future_forward_acceleration_raw": _unsqueeze_twice(_array_from_numpy(ego_fut_forward_acc.copy())),
         "ego_future_forward_acceleration_repaired": _unsqueeze_twice(_array_from_numpy(ego_fut_forward_acc_repaired)),
