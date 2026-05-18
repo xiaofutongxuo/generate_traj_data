@@ -28,6 +28,115 @@ from traj_core.cluster_utils import *
 
 class WidgetLayoutMixin:
 
+    def _create_scrollable_main_frame(self, bg_color: str):
+        scroll_container = tk.Frame(self.root, bg=bg_color)
+        scroll_container.pack(fill=tk.BOTH, expand=True)
+
+        self.main_scroll_canvas = tk.Canvas(
+            scroll_container,
+            bg=bg_color,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        v_scroll = ttk.Scrollbar(
+            scroll_container,
+            orient=tk.VERTICAL,
+            command=self.main_scroll_canvas.yview,
+        )
+        h_scroll = ttk.Scrollbar(
+            scroll_container,
+            orient=tk.HORIZONTAL,
+            command=self.main_scroll_canvas.xview,
+        )
+        self.main_scroll_canvas.configure(
+            yscrollcommand=v_scroll.set,
+            xscrollcommand=h_scroll.set,
+        )
+
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.main_scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        main_frame = tk.Frame(self.main_scroll_canvas, bg=bg_color)
+        self.main_scroll_frame = main_frame
+        self.main_scroll_window = self.main_scroll_canvas.create_window(
+            (0, 0),
+            window=main_frame,
+            anchor=tk.NW,
+        )
+        main_frame.pack_propagate(True)
+
+        main_frame.bind("<Configure>", self._sync_main_scrollregion)
+        self.main_scroll_canvas.bind("<Configure>", self._sync_main_scrollregion)
+        self.root.bind("<MouseWheel>", self._on_main_scroll_mousewheel, add="+")
+        self.root.bind("<Shift-MouseWheel>", self._on_main_scroll_shift_mousewheel, add="+")
+        self.root.bind("<Button-4>", self._on_main_scroll_linux_wheel, add="+")
+        self.root.bind("<Button-5>", self._on_main_scroll_linux_wheel, add="+")
+
+        content_pad = getattr(self, "responsive_content_pad", 12)
+        main_frame.configure(padx=content_pad, pady=content_pad)
+        return main_frame
+
+    def _sync_main_scrollregion(self, _event=None) -> None:
+        if not hasattr(self, "main_scroll_canvas"):
+            return
+        canvas = self.main_scroll_canvas
+        canvas.update_idletasks()
+        canvas_width = max(canvas.winfo_width(), 1)
+        canvas_height = max(canvas.winfo_height(), 1)
+        frame = self.main_scroll_frame
+        target_width = max(frame.winfo_reqwidth(), canvas_width)
+        target_height = max(frame.winfo_reqheight(), canvas_height)
+        canvas.itemconfigure(
+            self.main_scroll_window,
+            width=target_width,
+            height=target_height,
+        )
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _widget_owns_mousewheel(self, widget) -> bool:
+        try:
+            widget_class = str(widget.winfo_class())
+        except tk.TclError:
+            return False
+        return widget_class in {"Text", "Listbox", "TCombobox", "Combobox", "Spinbox"}
+
+    def _mousewheel_units(self, event) -> int:
+        delta = getattr(event, "delta", 0)
+        if delta:
+            units = int(-1 * (delta / 120))
+            if units == 0:
+                units = -1 if delta > 0 else 1
+            return units
+        return 0
+
+    def _on_main_scroll_mousewheel(self, event):
+        if self._widget_owns_mousewheel(event.widget):
+            return None
+        if getattr(event, "state", 0) & 0x0001:
+            return self._on_main_scroll_shift_mousewheel(event)
+        units = self._mousewheel_units(event)
+        if units:
+            self.main_scroll_canvas.yview_scroll(units, "units")
+            return "break"
+        return None
+
+    def _on_main_scroll_shift_mousewheel(self, event):
+        if self._widget_owns_mousewheel(event.widget):
+            return None
+        units = self._mousewheel_units(event)
+        if units:
+            self.main_scroll_canvas.xview_scroll(units, "units")
+            return "break"
+        return None
+
+    def _on_main_scroll_linux_wheel(self, event):
+        if self._widget_owns_mousewheel(event.widget):
+            return None
+        units = -3 if getattr(event, "num", None) == 4 else 3
+        self.main_scroll_canvas.yview_scroll(units, "units")
+        return "break"
+
     def _create_widgets(self):
         """Create GUI widgets with a modern dark theme."""
         # Style configuration
@@ -45,8 +154,7 @@ class WidgetLayoutMixin:
         # Configure global window background
         self.root.configure(bg=BG_MAIN)
 
-        main_frame = tk.Frame(self.root, bg=BG_MAIN)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        main_frame = self._create_scrollable_main_frame(BG_MAIN)
 
         # --- Top Header Bar ---
         header_frame = tk.Frame(main_frame, bg=BG_PANEL, relief=tk.FLAT, bd=0)
@@ -80,21 +188,37 @@ class WidgetLayoutMixin:
 
         tk.Label(jump_frame, text="Dataset", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.dataset_var = tk.StringVar()
-        self.dataset_combo = ttk.Combobox(jump_frame, textvariable=self.dataset_var, values=self.datasets, state="readonly", width=30)
+        self.dataset_combo = ttk.Combobox(
+            jump_frame,
+            textvariable=self.dataset_var,
+            values=self.datasets,
+            state="readonly",
+            width=getattr(self, "dataset_combo_width", 30),
+        )
         self.dataset_combo.pack(side=tk.LEFT, padx=(0, 12))
         self.dataset_combo.bind("<<ComboboxSelected>>", self._on_dataset_combo_selected)
         self._bind_arrow_keys_for_trajectory_navigation(self.dataset_combo)
 
         tk.Label(jump_frame, text="Clip", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.clip_var = tk.StringVar()
-        self.clip_combo = ttk.Combobox(jump_frame, textvariable=self.clip_var, state="readonly", width=24)
+        self.clip_combo = ttk.Combobox(
+            jump_frame,
+            textvariable=self.clip_var,
+            state="readonly",
+            width=getattr(self, "clip_combo_width", 24),
+        )
         self.clip_combo.pack(side=tk.LEFT, padx=(0, 12))
         self.clip_combo.bind("<<ComboboxSelected>>", self._on_clip_combo_selected)
         self._bind_arrow_keys_for_trajectory_navigation(self.clip_combo)
 
         tk.Label(jump_frame, text="t0", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.t0_var = tk.StringVar()
-        self.t0_combo = ttk.Combobox(jump_frame, textvariable=self.t0_var, state="readonly", width=22)
+        self.t0_combo = ttk.Combobox(
+            jump_frame,
+            textvariable=self.t0_var,
+            state="readonly",
+            width=getattr(self, "t0_combo_width", 22),
+        )
         self.t0_combo.pack(side=tk.LEFT, padx=(0, 16))
         self._bind_arrow_keys_for_trajectory_navigation(self.t0_combo)
 
@@ -104,7 +228,7 @@ class WidgetLayoutMixin:
             jump_frame,
             textvariable=self.scene_filter_var,
             state="readonly",
-            width=18,
+            width=getattr(self, "scene_combo_width", 18),
         )
         self.scene_filter_combo.pack(side=tk.LEFT, padx=(0, 16))
         self.scene_filter_combo.bind("<<ComboboxSelected>>", self._on_scene_filter_selected)
@@ -231,7 +355,11 @@ class WidgetLayoutMixin:
             create_camera_panel(main_camera_area, "FC", side=tk.TOP, expand=True)
 
         # 3. Right panel - Trajectory list, CoT, Clusters using PanedWindow
-        right_frame = tk.Frame(content_frame, bg=BG_PANEL, width=460)
+        right_frame = tk.Frame(
+            content_frame,
+            bg=BG_PANEL,
+            width=getattr(self, "right_panel_width", 460),
+        )
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH)
         right_frame.pack_propagate(False)
 
@@ -255,7 +383,8 @@ class WidgetLayoutMixin:
             list_frame, yscrollcommand=list_scroll.set,
             font=("Consolas", 10), bg="#121212", fg=FG_PRIMARY,
             selectbackground="#2196F3", selectforeground="white", height=12,
-            width=56, justify=tk.LEFT, relief=tk.FLAT, highlightthickness=1, highlightbackground="#333333"
+            width=getattr(self, "trajectory_listbox_width", 56),
+            justify=tk.LEFT, relief=tk.FLAT, highlightthickness=1, highlightbackground="#333333"
         )
         self.traj_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         list_scroll.config(command=self.traj_listbox.yview)

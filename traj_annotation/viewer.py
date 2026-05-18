@@ -28,6 +28,7 @@ from .mixins.sample_io import SampleIOMixin
 from .mixins.saved_traj_editing import SavedTrajectoryEditingMixin
 from .mixins.speed_controls import SpeedControlsMixin
 from .mixins.widget_layout import WidgetLayoutMixin
+from .responsive_layout import ResponsiveLayout, compute_responsive_layout
 from .scene_labels import build_scene_label_index
 
 
@@ -87,6 +88,17 @@ class TrajectoryViewerEnhanced(
         self.bev_forward_scale = 6.2
         self.bev_lateral_scale = 10.0
         self.bev_origin = (self.bev_canvas_width / 2, self.bev_canvas_height - 65)
+        self.responsive_layout = None
+        self.camera_fc_display_height = 720
+        self.camera_aux_display_height = 300
+        self.camera_fc_display_height_many = 600
+        self.camera_aux_display_height_many = 240
+        self.right_panel_width = 460
+        self.trajectory_listbox_width = 56
+        self.dataset_combo_width = 30
+        self.clip_combo_width = 24
+        self.t0_combo_width = 22
+        self.scene_combo_width = 18
         self.stop_marker_hitboxes = []
         self.stop_tooltip_items = []
         self.speed_hover_frame_idx = None
@@ -219,8 +231,8 @@ class TrajectoryViewerEnhanced(
 
         # Create GUI
         self.root = tk.Tk()
-        self.root.title("Trajectory Viewer (Enhanced)")
-        self.root.geometry("1900x1150")
+        self.root.title("Trajectory Annotator")
+        self._configure_responsive_window()
         self.root.configure(bg="#2b2b2b")
 
         self._create_widgets()
@@ -246,6 +258,50 @@ class TrajectoryViewerEnhanced(
         self.root.bind("<KeyPress-equal>", lambda e: self._cycle_selected_cluster_center(1))
 
         self.root.mainloop()
+
+    def _configure_responsive_window(self) -> None:
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        layout = compute_responsive_layout(screen_width, screen_height)
+        self._apply_responsive_layout(layout)
+        self.root.geometry(layout.geometry)
+        self.root.minsize(layout.min_width, layout.min_height)
+        if layout.start_maximized:
+            self.root.after_idle(self._try_maximize_root)
+
+    def _apply_responsive_layout(self, layout: ResponsiveLayout) -> None:
+        self.responsive_layout = layout
+        self.bev_canvas_width = layout.bev_canvas_width
+        self.bev_canvas_height = layout.bev_canvas_height
+        self.speed_canvas_width = layout.speed_canvas_width
+        self.speed_canvas_height = layout.speed_canvas_height
+        self.bev_forward_scale = layout.bev_forward_scale
+        self.bev_lateral_scale = layout.bev_lateral_scale
+        self.bev_origin = (
+            self.bev_canvas_width / 2,
+            self.bev_canvas_height - layout.bev_origin_bottom_margin,
+        )
+        self.camera_fc_display_height = layout.camera_fc_height
+        self.camera_aux_display_height = layout.camera_aux_height
+        self.camera_fc_display_height_many = layout.camera_fc_height_many
+        self.camera_aux_display_height_many = layout.camera_aux_height_many
+        self.right_panel_width = layout.right_panel_width
+        self.trajectory_listbox_width = layout.trajectory_listbox_width
+        self.dataset_combo_width = layout.dataset_combo_width
+        self.clip_combo_width = layout.clip_combo_width
+        self.t0_combo_width = layout.t0_combo_width
+        self.scene_combo_width = layout.scene_combo_width
+
+    def _try_maximize_root(self) -> None:
+        try:
+            self.root.state("zoomed")
+            return
+        except tk.TclError:
+            pass
+        try:
+            self.root.attributes("-zoomed", True)
+        except tk.TclError:
+            return
 
 
 __all__ = ["TrajectoryViewerEnhanced"]

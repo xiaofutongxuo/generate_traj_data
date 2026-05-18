@@ -34,6 +34,7 @@ from traj_annotation.mixins.delete_controls import DeleteControlsMixin
 from traj_annotation.mixins.navigation import NavigationMixin
 from traj_annotation.mixins.sample_io import SampleIOMixin
 from traj_annotation.mixins.saved_traj_editing import SavedTrajectoryEditingMixin
+from traj_annotation.responsive_layout import compute_responsive_layout
 from traj_annotation.save_audit import (
     apply_gui_edit_metadata,
     restore_file_from_backup_with_audit,
@@ -235,6 +236,34 @@ class GuiHelperTests(unittest.TestCase):
             self.assertEqual(gui_cli.default_data_root(), r"D:\traj\train_data")
             self.assertEqual(gui_cli.default_output_dir(), r"D:\traj\output")
             self.assertEqual(gui_cli.default_calibration_dir(), r"D:\traj\calibration")
+
+    def test_responsive_layout_scales_down_for_small_windows_screens(self):
+        layout = compute_responsive_layout(1366, 768)
+
+        self.assertLessEqual(layout.window_width, 1366)
+        self.assertLessEqual(layout.window_height, 768)
+        self.assertLess(layout.bev_canvas_height, 700)
+        self.assertLess(layout.speed_canvas_height, 180)
+        self.assertLess(layout.camera_fc_height, 720)
+        self.assertGreaterEqual(layout.bev_canvas_width, 400)
+        self.assertTrue(layout.start_maximized)
+
+    def test_responsive_layout_keeps_full_visual_size_on_large_screens(self):
+        layout = compute_responsive_layout(2560, 1440)
+
+        self.assertEqual(layout.bev_canvas_width, 560)
+        self.assertEqual(layout.bev_canvas_height, 700)
+        self.assertEqual(layout.speed_canvas_height, 180)
+        self.assertEqual(layout.camera_fc_height, 720)
+        self.assertEqual(layout.right_panel_width, 456)
+
+    def test_responsive_layout_never_exceeds_tiny_screen_size(self):
+        layout = compute_responsive_layout(800, 600)
+
+        self.assertLessEqual(layout.window_width, 800)
+        self.assertLessEqual(layout.window_height, 600)
+        self.assertLessEqual(layout.min_width, layout.window_width)
+        self.assertLessEqual(layout.min_height, layout.window_height)
 
     def test_setup_environment_on_windows_skips_linux_display_and_bundled_tk(self):
         from traj_annotation import environment

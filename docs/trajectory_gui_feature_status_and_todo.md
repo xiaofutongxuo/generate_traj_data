@@ -506,6 +506,8 @@ output/.backups/files/manual_points/
   `run_inference.py` 保留为推理薄入口。
 - README 已新增 Windows GUI-only PowerShell 安装和启动说明。
 - 根目录 `requirements.txt` 已导出 GUI-only 依赖，不包含 Alpamayo/VLA 推理依赖。
+- GUI 已新增屏幕自适应布局：启动时按屏幕大小计算窗口、BEV、速度曲线、相机图和右侧列表尺寸；
+  Windows 小屏会尽量最大化窗口，并提供主界面横向/纵向滚动兜底，避免不同分辨率下按钮或面板不可见。
 - 已新增单元测试覆盖 CLI 默认路径、环境变量覆盖、Windows 环境初始化、Linux-only `sys.path` 副作用清理和新入口包结构。
 
 待 Windows 实机验收：
@@ -513,6 +515,7 @@ output/.backups/files/manual_points/
 - `python trajectory_annotator.py --help`
 - import `TrajectoryViewerEnhanced`
 - 打开一个最小样本 GUI
+- 不同屏幕分辨率下确认主界面可滚动，顶部选择区、右侧列表、底部保存/删除/编辑按钮都可访问
 - 样本切换、轨迹选择、manual Bezier/cluster center 扩充、删除、保存
 - parquet/`manual_points.json`/cluster center 文件备份和 `edit_log.jsonl` 写入
 - OpenCV 视频读取是否需要额外 codec 或路径转义处理
