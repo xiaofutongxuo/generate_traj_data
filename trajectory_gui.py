@@ -28,9 +28,9 @@ from PIL import Image, ImageTk
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data_loader import get_dataset_names, get_clip_stems_from_dataset, load_data, get_t0_candidates
-from calibration_loader import load_calibration_for_segment
-from visualization import load_image_from_frame
+from traj_core.data_loader import get_dataset_names, get_clip_stems_from_dataset, load_data, get_t0_candidates
+from traj_core.calibration_loader import load_calibration_for_segment
+from traj_core.visualization import load_image_from_frame
 
 
 # Camera name to index mapping

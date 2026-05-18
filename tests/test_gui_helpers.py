@@ -1,22 +1,25 @@
 import math
+import os
 import json
 from pathlib import Path
+import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
-from frame_index import (
+from traj_core.frame_index import (
     build_video_frame_t0_candidates,
     load_master_video_timestamps,
     valid_video_frame_indices,
 )
-from data_loader import filter_t0s_with_full_future
-from calibration_loader import load_calibration_for_segment
-from traj_gui_enhanced.constants import HISTORY_SPEED_COLOR_HEX, SPEED_EDIT_LOCAL_RADIUS_FRAMES
-from traj_gui_enhanced.dynamics import (
+from traj_core.data_loader import filter_t0s_with_full_future
+from traj_core.calibration_loader import load_calibration_for_segment
+from traj_core.constants import HISTORY_SPEED_COLOR_HEX, SPEED_EDIT_LOCAL_RADIUS_FRAMES
+from traj_core.dynamics import (
     DynamicsLimits,
     deform_trajectory_by_keyframe_drag,
     diagnose_trajectory_dynamics,
@@ -24,15 +27,21 @@ from traj_gui_enhanced.dynamics import (
     optimize_pseudo_gt_trajectory,
     trajectory_components_from_xyz,
 )
-from traj_gui_enhanced.environment import setup_environment
-from traj_gui_enhanced.math_utils import _rgb_to_hex, _trajectory_base_color, _resample_curve_by_distance
-from traj_gui_enhanced.mixins.cluster_controls import ClusterControlsMixin
-from traj_gui_enhanced.mixins.delete_controls import DeleteControlsMixin
-from traj_gui_enhanced.mixins.navigation import NavigationMixin
-from traj_gui_enhanced.mixins.sample_io import SampleIOMixin
-from traj_gui_enhanced.mixins.saved_traj_editing import SavedTrajectoryEditingMixin
-from traj_gui_enhanced.mixins.speed_controls import SpeedControlsMixin
-from traj_gui_enhanced.speed_utils import (
+from traj_annotation.environment import setup_environment
+from traj_core.math_utils import _rgb_to_hex, _trajectory_base_color, _resample_curve_by_distance
+from traj_annotation.mixins.cluster_controls import ClusterControlsMixin
+from traj_annotation.mixins.delete_controls import DeleteControlsMixin
+from traj_annotation.mixins.navigation import NavigationMixin
+from traj_annotation.mixins.sample_io import SampleIOMixin
+from traj_annotation.mixins.saved_traj_editing import SavedTrajectoryEditingMixin
+from traj_annotation.save_audit import (
+    apply_gui_edit_metadata,
+    restore_file_from_backup_with_audit,
+    write_text_file_with_audit,
+    write_parquet_with_audit,
+)
+from traj_annotation.mixins.speed_controls import SpeedControlsMixin
+from traj_core.speed_utils import (
     TRAJ_ACCEL_MAX_MPS2,
     TRAJ_ACCEL_MIN_MPS2,
     TRAJ_DT_SECONDS,
@@ -47,7 +56,7 @@ from traj_gui_enhanced.speed_utils import (
     _smoothed_gt_speed_profile_from_xyz,
     _speed_smoothness_diagnostics,
 )
-from traj_gui_enhanced.trajectory_identity import (
+from traj_core.trajectory_identity import (
     drop_trajectory_rows_by_keys,
     is_deletable_trajectory_record,
     is_gt_trajectory_record,
@@ -183,12 +192,12 @@ class GuiHelperTests(unittest.TestCase):
         np.testing.assert_allclose(calibs["FC"].T_bev_to_camera[:, 3], [4.0, 5.0, 6.0])
         self.assertEqual(calibs["FC"].fx, 20)
 
-    def test_legacy_entrypoint_is_nonempty_wrapper(self):
-        entrypoint = Path(__file__).resolve().parents[1] / "trajectory_gui_enhanced.py"
+    def test_annotation_entrypoint_is_nonempty_wrapper(self):
+        entrypoint = Path(__file__).resolve().parents[1] / "trajectory_annotator.py"
 
         text = entrypoint.read_text(encoding="utf-8")
 
-        self.assertIn("traj_gui_enhanced.cli", text)
+        self.assertIn("traj_annotation.cli", text)
         self.assertIn("TrajectoryViewerEnhanced", text)
         self.assertGreater(len(text.splitlines()), 10)
 
@@ -197,6 +206,60 @@ class GuiHelperTests(unittest.TestCase):
         import tkinter
 
         self.assertGreaterEqual(float(tkinter.TkVersion), 8.6)
+
+    def test_gui_cli_defaults_are_cross_platform(self):
+        from traj_annotation import cli as gui_cli
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            defaults = [
+                gui_cli.default_data_root(),
+                gui_cli.default_output_dir(),
+                gui_cli.default_calibration_dir(),
+            ]
+
+        self.assertEqual(defaults, ["train_data", "output", "calibration"])
+        self.assertFalse(any(value.startswith("/home/") for value in defaults))
+
+    def test_gui_cli_defaults_use_environment_variables(self):
+        from traj_annotation import cli as gui_cli
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GENERATE_TRAJ_GUI_DATA_ROOT": r"D:\traj\train_data",
+                "GENERATE_TRAJ_GUI_OUTPUT_DIR": r"D:\traj\output",
+                "GENERATE_TRAJ_GUI_CALIBRATION_DIR": r"D:\traj\calibration",
+            },
+            clear=True,
+        ):
+            self.assertEqual(gui_cli.default_data_root(), r"D:\traj\train_data")
+            self.assertEqual(gui_cli.default_output_dir(), r"D:\traj\output")
+            self.assertEqual(gui_cli.default_calibration_dir(), r"D:\traj\calibration")
+
+    def test_setup_environment_on_windows_skips_linux_display_and_bundled_tk(self):
+        from traj_annotation import environment
+        import builtins
+
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "tkinter":
+                raise ModuleNotFoundError("tkinter")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("builtins.__import__", side_effect=fake_import):
+                with mock.patch.object(environment, "_configure_bundled_tk") as configure_bundled_tk:
+                    environment.setup_environment(platform_name="win32")
+                    display_value = os.environ.get("DISPLAY")
+                    use_torch_value = os.environ.get("GENERATE_TRAJ_USE_TORCH")
+
+        self.assertIsNone(display_value)
+        self.assertEqual(use_torch_value, "0")
+        configure_bundled_tk.assert_not_called()
+
+    def test_data_loader_does_not_unconditionally_prepend_linux_alpamayo_src(self):
+        self.assertNotIn("/home/tsingyu/lxh/alpamayo_1.5/src", sys.path[:5])
 
     def test_cluster_category_file_still_points_to_project_kmeans_dir(self):
         class Viewer(ClusterControlsMixin):
@@ -407,7 +470,7 @@ class GuiHelperTests(unittest.TestCase):
         self.assertFalse(viewer.updated)
 
     def test_scene_label_index_loads_labels_for_samples(self):
-        from traj_gui_enhanced.scene_labels import build_scene_label_index
+        from traj_annotation.scene_labels import build_scene_label_index
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -858,11 +921,337 @@ class GuiHelperTests(unittest.TestCase):
             before = diagnose_trajectory_dynamics(xyz).metrics["max_abs_curvature_1pm"]
             self.assertTrue(viewer._write_selected_trajectory_to_parquet(0))
             saved = pd.read_parquet(traj_file).iloc[0]
+            log_file = root / "output" / "edit_log.jsonl"
+            log_exists = log_file.exists()
+            backup_files = list((root / "output" / ".backups").glob("**/*.egomotion.parquet"))
 
         saved_xyz = np.column_stack([saved["x"], saved["y"], saved["z"]])
         after = diagnose_trajectory_dynamics(saved_xyz).metrics["max_abs_curvature_1pm"]
 
         self.assertLess(after, before)
+        self.assertEqual(saved["edit_version"], 1)
+        self.assertEqual(saved["edited_by_gui"], True)
+        self.assertEqual(saved["edit_operation"], "edit_selected_trajectory")
+        self.assertTrue(log_exists)
+        self.assertEqual(len(backup_files), 1)
+
+    def test_gui_edit_metadata_increments_only_affected_rows(self):
+        df = pd.DataFrame(
+            [
+                {"sample_idx": 0, "source": "vla", "edit_version": 2},
+                {"sample_idx": 1, "source": "manual_bezier", "edit_version": None},
+                {"sample_idx": 2, "source": "cluster_center", "edit_version": 5},
+            ]
+        )
+
+        updated = apply_gui_edit_metadata(
+            df,
+            row_indices=[0, 1],
+            operation="unit_test_edit",
+            edit_time="2026-05-18T12:00:00Z",
+        )
+
+        self.assertEqual(updated.loc[0, "edit_version"], 3)
+        self.assertEqual(updated.loc[1, "edit_version"], 1)
+        self.assertEqual(updated.loc[2, "edit_version"], 5)
+        self.assertEqual(updated.loc[0, "edited_by_gui"], True)
+        self.assertEqual(updated.loc[1, "edited_by_gui"], True)
+        self.assertTrue(pd.isna(updated.loc[2, "edited_by_gui"]))
+        self.assertEqual(updated.loc[0, "edit_time"], "2026-05-18T12:00:00Z")
+        self.assertEqual(updated.loc[1, "edit_operation"], "unit_test_edit")
+
+    def test_write_parquet_with_audit_creates_backup_and_jsonl_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            traj_dir = output_dir / "dataset_converted"
+            traj_dir.mkdir(parents=True)
+            traj_file = traj_dir / "clip.egomotion.parquet"
+            original = pd.DataFrame([{"t0_us": 1000, "sample_idx": 0, "source": "vla"}])
+            replacement = pd.DataFrame([{"t0_us": 1000, "sample_idx": 1, "source": "manual_bezier"}])
+            original.to_parquet(traj_file, index=False)
+
+            record = write_parquet_with_audit(
+                traj_file,
+                replacement,
+                output_dir=output_dir,
+                operation="unit_test_write",
+                dataset_name="dataset_converted",
+                clip_stem="clip",
+                t0_us=1000,
+                affected_rows=1,
+                edit_time="2026-05-18T12:00:00Z",
+            )
+
+            saved = pd.read_parquet(traj_file)
+            backup = pd.read_parquet(record.backup_file)
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(saved.iloc[0]["sample_idx"], 1)
+        self.assertEqual(backup.iloc[0]["sample_idx"], 0)
+        self.assertEqual(len(log_rows), 1)
+        self.assertEqual(log_rows[0]["operation"], "unit_test_write")
+        self.assertEqual(log_rows[0]["dataset_name"], "dataset_converted")
+        self.assertEqual(log_rows[0]["clip_stem"], "clip")
+        self.assertEqual(log_rows[0]["t0_us"], 1000)
+        self.assertEqual(log_rows[0]["rows_before"], 1)
+        self.assertEqual(log_rows[0]["rows_after"], 1)
+        self.assertEqual(log_rows[0]["affected_rows"], 1)
+        self.assertTrue(log_rows[0]["backup_file"].endswith(".egomotion.parquet"))
+
+    def test_write_text_file_with_audit_creates_backup_and_jsonl_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir(parents=True)
+            target_file = output_dir / "manual_points.json"
+            target_file.write_text('{"version": 1, "samples": []}\n', encoding="utf-8")
+
+            record = write_text_file_with_audit(
+                target_file,
+                '{"version": 1, "samples": [{"t0_us": 1000}]}\n',
+                output_dir=output_dir,
+                operation="save_manual_points",
+                dataset_name="dataset_converted",
+                clip_stem="clip",
+                t0_us=1000,
+                affected_rows=1,
+                edit_time="2026-05-18T12:01:00Z",
+                backup_group="manual_points",
+            )
+
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            saved_text = target_file.read_text(encoding="utf-8")
+            backup_text = record.backup_file.read_text(encoding="utf-8")
+
+        self.assertEqual(saved_text, '{"version": 1, "samples": [{"t0_us": 1000}]}\n')
+        self.assertEqual(backup_text, '{"version": 1, "samples": []}\n')
+        self.assertEqual(len(log_rows), 1)
+        self.assertEqual(log_rows[0]["operation"], "save_manual_points")
+        self.assertEqual(log_rows[0]["file_kind"], "text")
+        self.assertEqual(log_rows[0]["target_file"], "manual_points.json")
+        self.assertTrue(log_rows[0]["backup_file"].endswith(".json"))
+        self.assertGreater(log_rows[0]["bytes_after"], log_rows[0]["bytes_before"])
+
+    def test_restore_file_from_backup_with_audit_replaces_target_and_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir(parents=True)
+            target_file = output_dir / "dataset_converted" / "clip.egomotion.parquet"
+            target_file.parent.mkdir(parents=True)
+            target_file.write_text("active version\n", encoding="utf-8")
+            backup_file = output_dir / ".backups" / "dataset_converted" / "clip" / "old.egomotion.parquet"
+            backup_file.parent.mkdir(parents=True)
+            backup_file.write_text("restored version\n", encoding="utf-8")
+
+            record = restore_file_from_backup_with_audit(
+                target_file,
+                backup_file,
+                output_dir=output_dir,
+                operation="restore_parquet_backup",
+                dataset_name="dataset_converted",
+                clip_stem="clip",
+                t0_us=1000,
+                edit_time="2026-05-18T12:02:00Z",
+                backup_group="dataset_converted/clip",
+            )
+
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            restored_text = target_file.read_text(encoding="utf-8")
+            pre_restore_backup_text = record.backup_file.read_text(encoding="utf-8")
+
+        self.assertEqual(restored_text, "restored version\n")
+        self.assertEqual(pre_restore_backup_text, "active version\n")
+        self.assertEqual(len(log_rows), 1)
+        self.assertEqual(log_rows[0]["operation"], "restore_parquet_backup")
+        self.assertEqual(log_rows[0]["target_file"], "dataset_converted/clip.egomotion.parquet")
+        self.assertTrue(log_rows[0]["backup_file"].endswith(".egomotion.parquet"))
+        self.assertTrue(log_rows[0]["metadata"]["restored_from_backup"].endswith("old.egomotion.parquet"))
+
+    def test_manual_points_index_write_is_audited(self):
+        class Viewer(SampleIOMixin):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir(parents=True)
+            viewer = Viewer()
+            viewer.output_dir = output_dir
+            viewer.manual_points_file = output_dir / "manual_points.json"
+            viewer.manual_points_file.write_text('{"version": 1, "samples": []}\n', encoding="utf-8")
+            key = ("dataset_converted", "clip", 1000)
+            viewer.manual_line_points_index = {key: [{"x": 1.0, "y": 2.0, "z": 0.0}]}
+            viewer.manual_camera_line_points_index = {}
+            viewer.manual_stop_points_index = {}
+
+            viewer._write_manual_points_index()
+
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            backup_files = list((output_dir / ".backups" / "files" / "manual_points").glob("*.json"))
+            saved = json.loads(viewer.manual_points_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["samples"][0]["dataset_name"], "dataset_converted")
+        self.assertEqual(len(backup_files), 1)
+        self.assertEqual(log_rows[0]["operation"], "save_manual_points")
+        self.assertEqual(log_rows[0]["affected_rows"], 1)
+
+    def test_cluster_center_library_file_writes_are_audited(self):
+        class Viewer(ClusterControlsMixin):
+            def _cluster_category_file(self, category):
+                return self.kmeans_dir / f"{category}_centers.txt"
+
+            def _bezier_cluster_center_meta_file(self):
+                return self.kmeans_dir / "bezier_centers.json"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            kmeans_dir = Path(tmpdir) / "k_means"
+            output_dir.mkdir(parents=True)
+            kmeans_dir.mkdir(parents=True)
+            viewer = Viewer()
+            viewer.output_dir = output_dir
+            viewer.kmeans_dir = kmeans_dir
+            viewer.bezier_cluster_center_ids = {"straight": {2}}
+            category_file = viewer._cluster_category_file("straight")
+            meta_file = viewer._bezier_cluster_center_meta_file()
+            category_file.write_text("old centers\n", encoding="utf-8")
+            meta_file.write_text('{"version": 1, "centers": {"straight": [1]}}\n', encoding="utf-8")
+
+            viewer._write_cluster_category_file(
+                "straight",
+                [{"id": 2, "count": 1, "trajectory": np.zeros((2, 3), dtype=np.float32)}],
+            )
+            viewer._write_bezier_cluster_center_ids()
+
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            backup_files = list((output_dir / ".backups" / "files" / "k_means").glob("**/*"))
+
+        self.assertEqual([row["operation"] for row in log_rows], ["write_cluster_category_file", "write_bezier_cluster_center_ids"])
+        self.assertTrue(any(path.suffix == ".txt" for path in backup_files))
+        self.assertTrue(any(path.suffix == ".json" for path in backup_files))
+
+    def test_sample_io_restores_latest_current_clip_parquet_backup(self):
+        class Viewer(SampleIOMixin):
+            def _active_traj_file(self, dataset_name, clip_stem):
+                return self.output_dir / dataset_name / f"{clip_stem}.egomotion.parquet"
+
+            def _load_sample(self, idx):
+                self.loaded_idx = int(idx)
+
+            def _update_display(self):
+                self.updated = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            traj_dir = output_dir / "dataset_converted"
+            traj_dir.mkdir(parents=True)
+            traj_file = traj_dir / "clip.egomotion.parquet"
+            original = pd.DataFrame([{"t0_us": 1000, "sample_idx": 0, "source": "vla"}])
+            replacement = pd.DataFrame([{"t0_us": 1000, "sample_idx": 1, "source": "manual_bezier"}])
+            original.to_parquet(traj_file, index=False)
+            write_parquet_with_audit(
+                traj_file,
+                replacement,
+                output_dir=output_dir,
+                operation="unit_test_write",
+                dataset_name="dataset_converted",
+                clip_stem="clip",
+                t0_us=1000,
+                affected_rows=1,
+                edit_time="2026-05-18T12:03:00Z",
+            )
+
+            viewer = Viewer()
+            viewer.output_dir = output_dir
+            viewer.samples = [("dataset_converted", "clip", 1000)]
+            viewer.current_idx = 0
+
+            with mock.patch("traj_annotation.mixins.sample_io.messagebox.askyesno", return_value=True), \
+                 mock.patch("traj_annotation.mixins.sample_io.messagebox.showinfo"):
+                viewer._restore_latest_current_clip_backup()
+
+            restored = pd.read_parquet(traj_file)
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(restored.iloc[0]["sample_idx"], 0)
+        self.assertEqual(log_rows[-1]["operation"], "restore_parquet_backup")
+        self.assertTrue(log_rows[-1]["metadata"]["restored_from_backup"].endswith(".egomotion.parquet"))
+        self.assertEqual(viewer.loaded_idx, 0)
+        self.assertTrue(viewer.updated)
+
+    def test_sample_io_save_results_audits_delete_write(self):
+        class Viewer(SampleIOMixin):
+            def _active_traj_file(self, dataset_name, clip_stem):
+                return self.output_dir / dataset_name / f"{clip_stem}.egomotion.parquet"
+
+            def _persist_pending_manual_point_deletes(self):
+                self.persisted_manual_deletes = True
+
+            def _load_sample(self, idx):
+                self.loaded_idx = int(idx)
+
+            def _update_display(self):
+                self.updated = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            traj_dir = output_dir / "dataset_converted"
+            traj_dir.mkdir(parents=True)
+            traj_file = traj_dir / "clip.egomotion.parquet"
+            pd.DataFrame(
+                [
+                    {"t0_us": 1000, "sample_idx": 0, "source": "vla"},
+                    {"t0_us": 1000, "sample_idx": 1, "source": "manual_bezier"},
+                ]
+            ).to_parquet(traj_file, index=False)
+
+            viewer = Viewer()
+            viewer.output_dir = output_dir
+            viewer.samples = [("dataset_converted", "clip", 1000)]
+            viewer.current_idx = 0
+            viewer.speed_edit_active = False
+            viewer.traj_geom_edit_active = False
+            viewer.gt_only = False
+            viewer.pending_deleted_traj_keys = {(1000, 1)}
+
+            with mock.patch("traj_annotation.mixins.sample_io.messagebox.showinfo"):
+                viewer._save_results()
+
+            saved = pd.read_parquet(traj_file)
+            log_rows = [
+                json.loads(line)
+                for line in (output_dir / "edit_log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            backup_files = list((output_dir / ".backups").glob("**/*.egomotion.parquet"))
+
+        self.assertEqual(saved["sample_idx"].tolist(), [0])
+        self.assertEqual(len(backup_files), 1)
+        self.assertEqual(log_rows[0]["operation"], "delete_trajectories")
+        self.assertEqual(log_rows[0]["affected_rows"], 1)
+        self.assertEqual(log_rows[0]["metadata"]["deleted_keys"], [{"t0_us": 1000, "sample_idx": 1}])
 
     def test_trajectory_key_and_drop_rows_use_t0_and_sample_idx(self):
         key = trajectory_key_from_record({"t0_us": 111, "sample_idx": 4, "source": "manual_bezier"}, 0)

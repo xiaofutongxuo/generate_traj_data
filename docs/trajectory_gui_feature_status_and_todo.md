@@ -1,10 +1,13 @@
 # Trajectory GUI 功能状态与维护 TODO
 
-创建日期：2026-05-13  
+创建日期：2026-05-13
 适用项目：`/home/ubuntu/Public/hzq/generate_traj_data`
 
 本文档用于快速了解当前项目已实现功能、已知问题、潜在风险和后续 TODO。历史逐次优化记录见
 `docs/trajectory_gui_optimization_log.md`；本文件更偏向后续维护入口和需求清单。
+
+面向标注人员的完整操作说明见 `docs/GUI操作手册.html`；其 Markdown 源文件为
+`docs/GUI操作手册.md`。
 
 ## 1. 当前代码入口与运行路径
 
@@ -14,26 +17,24 @@
 cd /home/ubuntu/Public/hzq/generate_traj_data
 ```
 
-增强 GUI 兼容入口仍然是：
+标注 GUI 入口是：
 
 ```bash
-/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python trajectory_gui_enhanced.py \
+/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python trajectory_annotator.py \
   --data_root /home/ubuntu/Public/train_data \
   --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output \
   --calibration_dir /home/ubuntu/Public/yzb/triplane_tokenization/cailibration \
   --no_restore_last
 ```
 
-当前代码实现已经拆分到 `traj_gui_enhanced/` 包中：
+当前代码已按职责拆分为 `traj_core/`、`traj_annotation/`、`traj_inference/`：
 
 ```text
-trajectory_gui_enhanced.py       # 兼容入口，仅 re-export 和调用 cli.main()
-traj_gui_enhanced/cli.py         # GUI CLI 参数
-traj_gui_enhanced/viewer.py      # TrajectoryViewerEnhanced 主类和 mixin 组合
-frame_index.py                   # 视频帧 t0 索引与覆盖率统计工具
-traj_gui_enhanced/dynamics/      # 伪 GT 动力学诊断、优化和 parquet 字段重算
-traj_gui_enhanced/*_utils.py     # 轨迹、速度、投影、cluster 工具函数
-traj_gui_enhanced/mixins/        # GUI 功能区：I/O、布局、导航、手工编辑、速度、绘制等
+trajectory_annotator.py        # GUI 标注入口，调用 traj_annotation.cli.main()
+run_inference.py               # 推理兼容入口，调用 traj_inference.runner.main()
+traj_core/                     # 共享数据读取、标定、帧索引、轨迹动力学和 parquet 字段工具
+traj_annotation/               # GUI 标注工具：viewer、mixins、保存审计、交互逻辑
+traj_inference/                # Alpamayo 模型加载与批量推理生成逻辑
 ```
 
 注意：GUI 在 Linux 远程 X11 forwarding 下可能比较慢；如果 `$DISPLAY` 为空，当前环境设置会自动使用本机
@@ -60,7 +61,7 @@ t0_us, sample_idx, source, timestamp, qx, qy, qz, qw, x, y, z, vx, vy, vz, curva
 - `source` 用于区分伪 GT 来源：VLA 生成轨迹写入 `vla`，手工 Bezier 写入 `manual_bezier`，cluster center 写入 `cluster_center` 或历史 `rule_cluster`。
 - 真实 GT 只从 `/home/ubuntu/Public/train_data` 原始数据集读取，用于 GUI 显示、对比和诊断。
 - 历史 output 中如果存在 `source=gt` 行，会被视为旧数据污染；GUI 默认不把它计入伪 GT 覆盖率，也不放入右侧可编辑轨迹列表。
-- VLA 输出、manual Bezier、cluster center 和已选中伪 GT 的保存写回会经过 `traj_gui_enhanced/dynamics/` 做速度、加速度、jerk、曲率诊断和保守优化，并统一重算 `vx/vy/vz/qx/qy/qz/qw/curvature`。
+- VLA 输出、manual Bezier、cluster center 和已选中伪 GT 的保存写回会经过 `traj_core/dynamics/` 做速度、加速度、jerk、曲率诊断和保守优化，并统一重算 `vx/vy/vz/qx/qy/qz/qw/curvature`。
 - CoT 文本保存到：
 
 ```text
@@ -119,7 +120,7 @@ output/cot.jsonl
 - GT 速度面板仍可用于查看原始数据集 GT 的速度趋势和诊断。
 - 真实 GT 不再写入 output parquet；GT 优化/停车保存入口当前会提示 GT 来自源数据，output 只保存伪 GT。
 - `AUTO_OPTIMIZE_GT_ON_LOAD = False`，加载样本时不会再自动优化并写回 GT 行。
-- 新增通用 `dynamics` 子包，当前已用于：
+- 新增通用 `traj_core/dynamics/` 子包，当前已用于：
   - `run_inference.py` 保存 VLA 生成轨迹前的伪 GT 优化；
   - `Save Curve Traj` / cluster `Confirm Save` 追加轨迹前的伪 GT 优化；
   - 已保存非 GT 轨迹速度编辑写回 parquet 前的伪 GT 优化。
@@ -152,7 +153,7 @@ output/manual_points.json
 
 ### 2.9 GT 修复与质量诊断
 
-- `data_loader.py` 中实现了基于速度/加速度限制的 GT future 修复。
+- `traj_core/data_loader.py` 中实现了基于速度/加速度限制的 GT future 修复。
 - GUI 中有 `Repair GT` / `Restore GT` 按钮。
 - 状态栏显示 GT 加速度范围、最大步长、异常数量等质量诊断。
 
@@ -165,8 +166,9 @@ output/manual_points.json
 
 ```bash
 ./.venv/bin/python -m unittest discover -s tests
-./.venv/bin/python -m py_compile frame_index.py data_loader.py run_inference.py trajectory_gui_enhanced.py traj_gui_enhanced/*.py traj_gui_enhanced/mixins/*.py
-./.venv/bin/python trajectory_gui_enhanced.py --help
+./.venv/bin/python -m py_compile traj_core/*.py traj_core/dynamics/*.py traj_inference/*.py run_inference.py trajectory_annotator.py traj_annotation/*.py traj_annotation/mixins/*.py
+./.venv/bin/python trajectory_annotator.py --help
+./.venv/bin/python run_inference.py --help
 ```
 
 ## 3. 当前潜在问题与维护风险
@@ -176,7 +178,7 @@ output/manual_points.json
 TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但旧模式仍保留：
 
 - `run_inference.py --t0_source speed_candidates` 会走旧的 `data_loader.get_t0_candidates()`，内部仍是每 30 帧扫描一次候选，并可叠加 `--candidate_stride`。
-- `trajectory_gui_enhanced.py --index_mode generated` 只显示 output parquet 中已经存在的 `t0_us`。
+- `trajectory_annotator.py --index_mode generated` 只显示 output parquet 中已经存在的 `t0_us`。
 
 因此如果需要“每个视频帧都生成并检查”，应使用默认 `--t0_source video_frames --frame_stride 1` 和默认 GUI `--index_mode video_frames --frame_stride 1`。
 
@@ -198,7 +200,7 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 
 ### 3.4 CLI 路径默认值与当前机器路径
 
-`traj_gui_enhanced/cli.py` 的 GUI 默认值已改为跨平台相对路径，并支持环境变量覆盖。README 仍建议在当前
+`traj_annotation/cli.py` 的 GUI 默认值已改为跨平台相对路径，并支持环境变量覆盖。README 仍建议在当前
 Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 `--data_root` 下的数据集本地 XML，
 `--calibration_dir` 只是旧 JSONL 兜底目录。
 
@@ -224,13 +226,13 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 ### 3.7 Windows 支持仍需实机验收
 
-当前增强 GUI 已做第一版跨平台清理：GUI CLI 默认路径不再硬编码 `/home/...`，Windows 下不会设置 X11
+当前标注 GUI 已做第一版跨平台清理：GUI CLI 默认路径不再硬编码 `/home/...`，Windows 下不会设置 X11
 `DISPLAY`，也不会尝试加载 Linux `.runtime/tk` 里的 `.so` 文件。README 已补充 PowerShell
 启动方式。
 
 仍需注意：
 
-- Windows 支持范围只覆盖增强 GUI 浏览、扩充、编辑、删除、保存和审计恢复；不覆盖 Windows 本机模型推理。
+- Windows 支持范围只覆盖标注 GUI 浏览、扩充、编辑、删除、保存和审计恢复；不覆盖 Windows 本机模型推理。
 - 仍需要在 Windows 实机上验证 Tk 窗口、OpenCV 视频读取、parquet 读写和大数据路径性能。
 
 ## 4. 新需求 TODO List
@@ -242,7 +244,7 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 当前状态：
 
 - “完整数据所有帧”已按用户确认定义为主视频时间戳中的所有视频帧，视频约 10Hz，即 0.1s 一帧。
-- 新增 `frame_index.py`，集中读取 `data-timestamps/{clip}.timestamps.parquet` 并生成逐帧 `t0_us`。
+- 新增 `traj_core/frame_index.py`，集中读取 `data-timestamps/{clip}.timestamps.parquet` 并生成逐帧 `t0_us`。
 - `run_inference.py` 默认 `--t0_source video_frames --frame_stride 1`，不会再套旧的 `candidate_stride`，因此默认逐视频帧生成扩充轨迹。
 - 旧稀疏候选模式仍可通过 `--t0_source speed_candidates` 使用，方便需要快速抽样时回退。
 - GUI 默认 `--index_mode video_frames --frame_stride 1`，即使某个有效视频帧还没有生成轨迹，也能显示图像、真实 history、GT 和状态栏覆盖率。
@@ -265,11 +267,11 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 相关文件：
 
-- `data_loader.py`
-- `frame_index.py`
+- `traj_core/data_loader.py`
+- `traj_core/frame_index.py`
 - `run_inference.py`
-- `traj_gui_enhanced/mixins/sample_io.py`
-- `traj_gui_enhanced/cli.py`
+- `traj_annotation/mixins/sample_io.py`
+- `traj_annotation/cli.py`
 - `README.md`
 
 ### P1 TODO-002 增加历史轨迹速度显示（已完成）
@@ -298,10 +300,10 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 相关文件：
 
-- `traj_gui_enhanced/mixins/speed_controls.py`
-- `traj_gui_enhanced/mixins/draw_speed.py`
-- `traj_gui_enhanced/mixins/draw_bev.py`
-- `traj_gui_enhanced/mixins/widget_layout.py`
+- `traj_annotation/mixins/speed_controls.py`
+- `traj_annotation/mixins/draw_speed.py`
+- `traj_annotation/mixins/draw_bev.py`
+- `traj_annotation/mixins/widget_layout.py`
 
 ### P1 TODO-003 增加扩充轨迹删除功能（已完成）
 
@@ -320,8 +322,8 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 已实现方向：
 
-- 新增 `traj_gui_enhanced/trajectory_identity.py`，集中维护 source 规范化、GT 保护、轨迹 key 和 parquet 删除过滤。
-- 新增 `traj_gui_enhanced/mixins/delete_controls.py`，集中维护 pending delete、撤销删除和列表行到真实轨迹 index 的映射。
+- 新增 `traj_core/trajectory_identity.py`，集中维护 source 规范化、GT 保护、轨迹 key 和 parquet 删除过滤。
+- 新增 `traj_annotation/mixins/delete_controls.py`，集中维护 pending delete、撤销删除和列表行到真实轨迹 index 的映射。
 - 删除后的轨迹直接从 GUI 中消失，保存前仍保留在原 parquet 中。
 - 对匹配当前手工 Bezier 曲线的删除，会 staged 清空 manual 控制点，确认保存后同步写回 `manual_points.json`。
 
@@ -333,12 +335,12 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 相关文件：
 
-- `traj_gui_enhanced/mixins/navigation.py`
-- `traj_gui_enhanced/mixins/sample_io.py`
-- `traj_gui_enhanced/mixins/manual_editing.py`
-- `traj_gui_enhanced/mixins/cluster_controls.py`
-- `traj_gui_enhanced/mixins/delete_controls.py`
-- `traj_gui_enhanced/trajectory_identity.py`
+- `traj_annotation/mixins/navigation.py`
+- `traj_annotation/mixins/sample_io.py`
+- `traj_annotation/mixins/manual_editing.py`
+- `traj_annotation/mixins/cluster_controls.py`
+- `traj_annotation/mixins/delete_controls.py`
+- `traj_core/trajectory_identity.py`
 
 ### P1 TODO-004 人工修改伪 GT 后进行加速度/曲率优化并保存（代码闭环已完成，建议真实 GUI 验收）
 
@@ -350,7 +352,7 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 - 手工 Bezier 新建轨迹会走加速度限制重采样。
 - cluster endpoint 拖拽会进行加速度、曲率、位移幅度限制。
 - 生成/扩充轨迹的速度优化会沿原路径平滑速度并重采样。
-- 已新增 `traj_gui_enhanced/dynamics/` 子包，提供 `DynamicsLimits`、`diagnose_trajectory_dynamics()`、`optimize_pseudo_gt_trajectory()` 和 `trajectory_components_from_xyz()`。
+- 已新增 `traj_core/dynamics/` 子包，提供 `DynamicsLimits`、`diagnose_trajectory_dynamics()`、`optimize_pseudo_gt_trajectory()` 和 `trajectory_components_from_xyz()`。
 - VLA 输出、manual Bezier、cluster center 追加轨迹、已保存非 GT 速度编辑写回 parquet 前，都会走通用 dynamics 优化并重算 parquet 轨迹字段。
 - 已实现直接编辑“已经保存到 output 的扩充轨迹”的第一版 GUI 工作流：`Edit Traj` 进入模式，BEV 关键帧手柄左键拖动，拖动后局部形变 + dynamics 优化，`Save Edit` 写回原 parquet 行，`Cancel Edit` 放弃，`Restore Edit` 回到进入编辑时的原始轨迹。
 - 已补齐编辑状态保护：几何编辑未保存/取消前，不能删除轨迹、不能启动速度编辑、不能切换样本或切换到其他轨迹，也不能开启第二个几何编辑。
@@ -365,7 +367,7 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
   - 对候选轨迹进行加速度、曲率、最大速度、最大单步位移限制；
   - 重新计算 `vx/vy/vz/qx/qy/qz/qw/curvature`；
   - 保存时写回对应 parquet 行。
-- 优化策略当前已封装到 `traj_gui_enhanced/dynamics/`，内部复用 `_acceleration_limited_resample_path()` 与 `_smooth_curvature_preserving_ends()`；后续 GUI 几何编辑应直接调用该模块，避免再复制一套动力学逻辑。
+- 优化策略当前已封装到 `traj_core/dynamics/`，内部复用 `_acceleration_limited_resample_path()` 与 `_smooth_curvature_preserving_ends()`；后续 GUI 几何编辑应直接调用该模块，避免再复制一套动力学逻辑。
 - UI 需要有明确的 `接受/取消/恢复原状` 流程，避免误写 output。
 
 验收建议：
@@ -377,15 +379,15 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 相关文件：
 
-- `traj_gui_enhanced/mixins/manual_events.py`
-- `traj_gui_enhanced/mixins/manual_editing.py`
-- `traj_gui_enhanced/mixins/saved_traj_editing.py`
-- `traj_gui_enhanced/mixins/sample_io.py`
-- `traj_gui_enhanced/mixins/speed_controls.py`
-- `traj_gui_enhanced/dynamics/`
-- `traj_gui_enhanced/cluster_utils.py`
-- `traj_gui_enhanced/speed_utils.py`
-- `traj_gui_enhanced/math_utils.py`
+- `traj_annotation/mixins/manual_events.py`
+- `traj_annotation/mixins/manual_editing.py`
+- `traj_annotation/mixins/saved_traj_editing.py`
+- `traj_annotation/mixins/sample_io.py`
+- `traj_annotation/mixins/speed_controls.py`
+- `traj_core/dynamics/`
+- `traj_core/cluster_utils.py`
+- `traj_core/speed_utils.py`
+- `traj_core/math_utils.py`
 
 ### P1 TODO-005 Cluster center 预览隐藏与速度曲线联动（已实现，建议真实 GUI 验收）
 
@@ -405,8 +407,8 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 已实现改动：
 
-- `traj_gui_enhanced/mixins/cluster_controls.py` 新增 `_hide_cluster_preview()`。
-- `traj_gui_enhanced/mixins/widget_layout.py` 在 `Confirm Save` 旁新增 `Hide` 按钮。
+- `traj_annotation/mixins/cluster_controls.py` 新增 `_hide_cluster_preview()`。
+- `traj_annotation/mixins/widget_layout.py` 在 `Confirm Save` 旁新增 `Hide` 按钮。
 - `tests/test_gui_helpers.py` 新增：
   - `test_cluster_preview_hide_clears_unsaved_preview_only`
   - `test_cluster_preview_speed_profile_follows_current_preview_geometry`
@@ -419,11 +421,11 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 相关文件：
 
-- `traj_gui_enhanced/mixins/cluster_controls.py`
-- `traj_gui_enhanced/mixins/widget_layout.py`
-- `traj_gui_enhanced/mixins/speed_controls.py`
-- `traj_gui_enhanced/mixins/draw_bev.py`
-- `traj_gui_enhanced/mixins/draw_camera.py`
+- `traj_annotation/mixins/cluster_controls.py`
+- `traj_annotation/mixins/widget_layout.py`
+- `traj_annotation/mixins/speed_controls.py`
+- `traj_annotation/mixins/draw_bev.py`
+- `traj_annotation/mixins/draw_camera.py`
 - `tests/test_gui_helpers.py`
 
 ### P2 TODO-006 增加历史/未来速度统一诊断视图
@@ -442,7 +444,7 @@ Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 
 
 当前状态：
 
-- 增强 GUI 仍直接写回 active parquet，保持现有读取路径和覆盖率统计不变。
+- 标注 GUI 仍直接写回 active parquet，保持现有读取路径和覆盖率统计不变。
 - 每次 GUI parquet 写回前，会自动把原 parquet 复制到：
 
 ```text
@@ -488,23 +490,27 @@ output/.backups/files/manual_points/
 
 当前状态：
 
-- 本阶段明确不覆盖 Windows 本机模型推理，只支持增强 GUI 使用已有 `train_data` 和 `output` 做轨迹浏览、扩充、编辑、删除、保存和审计恢复。
-- `traj_gui_enhanced/cli.py` 的 GUI 默认路径已经改为跨平台相对路径，并支持环境变量：
+- 本阶段明确不覆盖 Windows 本机模型推理，只支持标注 GUI 使用已有 `train_data` 和 `output` 做轨迹浏览、扩充、编辑、删除、保存和审计恢复。
+- `traj_annotation/cli.py` 的 GUI 默认路径已经改为跨平台相对路径，并支持环境变量：
   - `GENERATE_TRAJ_GUI_DATA_ROOT`
   - `GENERATE_TRAJ_GUI_OUTPUT_DIR`
   - `GENERATE_TRAJ_GUI_CALIBRATION_DIR`
   - 同时兼容旧的 `TRAIN_DATA_ROOT`、`OUTPUT_DIR`、`CALIBRATION_DIR`。
-- `traj_gui_enhanced/environment.py` 已区分 Windows/Linux：
+- `traj_annotation/environment.py` 已区分 Windows/Linux：
   - Windows 下不设置 X11 `DISPLAY`；
   - Windows 下不使用 Linux `.runtime/tk` fallback；
   - PATH-like 环境变量拼接使用 `os.pathsep`。
-- `data_loader.py` 不再无条件插入 `/home/tsingyu/lxh/alpamayo_1.5/src`，避免 GUI import 时污染 Windows `sys.path`。
+- `traj_core/data_loader.py` 不再无条件插入 `/home/tsingyu/lxh/alpamayo_1.5/src`，避免 GUI import 时污染 Windows `sys.path`。
+- 为便于向标注人员提供 GUI-only 工具，项目已完成职责拆分：`trajectory_annotator.py` 只进入
+  `traj_annotation/`，共享读取/动力学逻辑放在 `traj_core/`，Alpamayo 推理逻辑独立到 `traj_inference/`；
+  `run_inference.py` 保留为推理薄入口。
 - README 已新增 Windows GUI-only PowerShell 安装和启动说明。
-- 已新增单元测试覆盖 CLI 默认路径、环境变量覆盖、Windows 环境初始化和 Linux-only `sys.path` 副作用清理。
+- 根目录 `requirements.txt` 已导出 GUI-only 依赖，不包含 Alpamayo/VLA 推理依赖。
+- 已新增单元测试覆盖 CLI 默认路径、环境变量覆盖、Windows 环境初始化、Linux-only `sys.path` 副作用清理和新入口包结构。
 
 待 Windows 实机验收：
 
-- `python trajectory_gui_enhanced.py --help`
+- `python trajectory_annotator.py --help`
 - import `TrajectoryViewerEnhanced`
 - 打开一个最小样本 GUI
 - 样本切换、轨迹选择、manual Bezier/cluster center 扩充、删除、保存
@@ -524,7 +530,7 @@ output/.backups/files/manual_points/
 4. TODO-004 代码闭环已完成：基础 dynamics、保存前优化、已保存轨迹 BEV 关键帧编辑、接受/取消/恢复原状和编辑状态保护已经接入；下一步主要是真实 GUI 验收和手感调参。
 5. TODO-005 已实现代码闭环：cluster center 未保存 preview 可通过 `Hide` 隐藏，cluster preview 切换/拖拽后 `Diversity Speed Profile` 有回归测试保护；仍建议真实 GUI 验收按钮位置和交互手感。
 6. TODO-007 已完成：GUI parquet、`manual_points.json` 和 cluster center 库文件写回前自动备份，写回后记录 `edit_log.jsonl`；GUI 提供日志查看和当前 clip parquet 备份恢复入口。
-7. TODO-008 GUI 第一版已实现：路径默认值、环境初始化、Windows README 和回归测试已补齐；下一步是 Windows 实机验收。
+7. TODO-008 GUI 第一版和目录职责拆分已实现：路径默认值、环境初始化、Windows README、新入口 `trajectory_annotator.py`、`traj_core/`/`traj_annotation/`/`traj_inference/` 分层和回归测试已补齐；下一步是 Windows 实机验收。
 
 ## 6. 待确认问题
 

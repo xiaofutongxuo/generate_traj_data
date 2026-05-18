@@ -1,6 +1,10 @@
 # Trajectory GUI Optimization Log
 
-本文档记录 `trajectory_gui_enhanced.py` 可视化工具的每次优化，按修改序号追踪需求、改动位置、验证方式和后续注意事项。
+本文档记录轨迹 GUI/标注工具的每次优化，按修改序号追踪需求、改动位置、验证方式和后续注意事项。
+
+> 路径说明：031 之前的条目保留当时真实文件名，例如 `trajectory_gui_enhanced.py` 和
+> `traj_gui_enhanced/`；031 之后当前入口为 `trajectory_annotator.py`，GUI 包为
+> `traj_annotation/`，共享工具为 `traj_core/`，推理包为 `traj_inference/`。
 
 ## 001 停车点显式标识与悬浮提示
 
@@ -530,3 +534,22 @@
   - Windows 本机 `run_inference.py` 模型推理仍不在本阶段支持范围内。
 - 验证方式：
   - 新增测试覆盖跨平台 GUI 默认路径、环境变量覆盖、Windows 环境初始化跳过 Linux fallback、以及 `data_loader` 不再污染 GUI import 的 Linux `sys.path`。
+
+## 031 推理与 GUI 标注目录结构拆分
+
+- 日期：2026-05-18
+- 需求：模型推理和 GUI 轨迹扩充标注需要分离，方便把 GUI 工具提供给标注人员做轨迹多样化标注，同时保持现有功能一致。
+- 改动文件：`trajectory_annotator.py`、`run_inference.py`、`traj_core/`、`traj_annotation/`、`traj_inference/`、`tests/test_project_structure.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 新增 `trajectory_annotator.py` 作为 GUI 标注工具入口；旧 `trajectory_gui_enhanced.py` 入口移除。
+  - 共享模块迁入 `traj_core/`：数据读取、标定、视频帧索引、可视化投影、轨迹常量、速度/几何工具、cluster 工具、伪 GT 动力学和轨迹身份/删除 key。
+  - GUI 标注模块迁入 `traj_annotation/`：CLI、viewer、mixins、Tk 环境、保存审计、scene labels 和 GUI 专用投影兼容工具。
+  - Alpamayo 推理模块迁入 `traj_inference/`：配置、模型加载和推理 runner；根目录 `run_inference.py` 保留为薄入口。
+  - `traj_inference.runner` 调整为 import/`--help` 不强制导入 torch/model loader，避免 GUI-only 环境因为推理依赖缺失而无法检查结构。
+- 当前行为：
+  - GUI 标注人员只需要使用 `trajectory_annotator.py` 和 `traj_annotation/`。
+  - 模型推理仍通过 `run_inference.py` 启动，内部转调 `traj_inference.runner`。
+  - 原有 GUI 浏览、轨迹扩充、删除、编辑、保存审计逻辑保持一致。
+- 验证方式：
+  - 新增 `tests/test_project_structure.py` 覆盖新入口和三层包 import。
+  - 更新 `tests/test_gui_helpers.py` 到新包路径。

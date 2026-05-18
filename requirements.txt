@@ -1,0 +1,15 @@
+# GUI-only dependencies for trajectory annotation and diversity expansion.
+# This file intentionally excludes Alpamayo/VLA inference dependencies such as
+# torch, torchvision, transformers, peft, accelerate, and model-specific code.
+#
+# Notes:
+# - Use Python 3.10 or 3.11.
+# - Tkinter is required by the GUI but is provided by the Python installation,
+#   not by pip. On Windows, enable Tcl/Tk when installing Python.
+
+numpy>=1.23
+pandas>=1.5
+pyarrow>=10
+scipy>=1.9
+Pillow>=9
+opencv-python>=4.7

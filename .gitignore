@@ -43,3 +43,5 @@ k_means/kmeans_stop_results.txt
 .vscode/
 
 tests/
+!tests/
+!tests/*.py
