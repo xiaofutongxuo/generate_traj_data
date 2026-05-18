@@ -33,8 +33,12 @@ class DrawSpeedMixin:
         if canvas is None:
             return
         canvas.delete("all")
-        width = self.speed_canvas_width
-        height = self.speed_canvas_height
+        # Always use the real rendered size of the canvas; fall back to the
+        # initially configured dimensions when the canvas hasn't been mapped yet.
+        _cw = canvas.winfo_width()
+        _ch = canvas.winfo_height()
+        width = _cw if _cw > 10 else self.speed_canvas_width
+        height = _ch if _ch > 10 else self.speed_canvas_height
         rect = self._speed_plot_geometry()
         if source == "gt":
             self.gt_speed_plot_rect = rect

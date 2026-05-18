@@ -50,8 +50,10 @@ class DrawCameraMixin:
 
                 # Resize for display
                 h, w = cam_frame_rgb.shape[:2]
+                
                 new_h = self._camera_display_height(cam)
-                new_w = int(new_h * w / h)
+                new_w = max(1, int(new_h * w / h))
+
                 self.camera_display_meta[cam] = {
                     "source_width": w,
                     "source_height": h,

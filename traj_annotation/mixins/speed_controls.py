@@ -301,8 +301,19 @@ class SpeedControlsMixin:
         margin_right = 14
         margin_top = 22
         margin_bottom = 30
-        plot_w = self.speed_canvas_width - margin_left - margin_right
-        plot_h = self.speed_canvas_height - margin_top - margin_bottom
+        # Use actual rendered canvas size when available
+        _w = 0
+        _h = 0
+        if hasattr(self, "speed_canvas"):
+            try:
+                _w = self.speed_canvas.winfo_width()
+                _h = self.speed_canvas.winfo_height()
+            except Exception:
+                pass
+        canvas_w = _w if _w > 10 else getattr(self, "speed_canvas_width", 560)
+        canvas_h = _h if _h > 10 else getattr(self, "speed_canvas_height", 180)
+        plot_w = canvas_w - margin_left - margin_right
+        plot_h = canvas_h - margin_top - margin_bottom
         return {
             "left": float(margin_left),
             "top": float(margin_top),

@@ -29,113 +29,15 @@ from traj_core.cluster_utils import *
 class WidgetLayoutMixin:
 
     def _create_scrollable_main_frame(self, bg_color: str):
-        scroll_container = tk.Frame(self.root, bg=bg_color)
-        scroll_container.pack(fill=tk.BOTH, expand=True)
-
-        self.main_scroll_canvas = tk.Canvas(
-            scroll_container,
-            bg=bg_color,
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        v_scroll = ttk.Scrollbar(
-            scroll_container,
-            orient=tk.VERTICAL,
-            command=self.main_scroll_canvas.yview,
-        )
-        h_scroll = ttk.Scrollbar(
-            scroll_container,
-            orient=tk.HORIZONTAL,
-            command=self.main_scroll_canvas.xview,
-        )
-        self.main_scroll_canvas.configure(
-            yscrollcommand=v_scroll.set,
-            xscrollcommand=h_scroll.set,
-        )
-
-        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-        self.main_scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        main_frame = tk.Frame(self.main_scroll_canvas, bg=bg_color)
-        self.main_scroll_frame = main_frame
-        self.main_scroll_window = self.main_scroll_canvas.create_window(
-            (0, 0),
-            window=main_frame,
-            anchor=tk.NW,
-        )
-        main_frame.pack_propagate(True)
-
-        main_frame.bind("<Configure>", self._sync_main_scrollregion)
-        self.main_scroll_canvas.bind("<Configure>", self._sync_main_scrollregion)
-        self.root.bind("<MouseWheel>", self._on_main_scroll_mousewheel, add="+")
-        self.root.bind("<Shift-MouseWheel>", self._on_main_scroll_shift_mousewheel, add="+")
-        self.root.bind("<Button-4>", self._on_main_scroll_linux_wheel, add="+")
-        self.root.bind("<Button-5>", self._on_main_scroll_linux_wheel, add="+")
-
+        # We no longer use a scrollable frame so that the layout can truly be responsive and fill the screen.
+        main_frame = tk.Frame(self.root, bg=bg_color)
+        main_frame.pack(fill=tk.BOTH, expand=True)
         content_pad = getattr(self, "responsive_content_pad", 12)
         main_frame.configure(padx=content_pad, pady=content_pad)
+        self.main_scroll_frame = main_frame
         return main_frame
 
-    def _sync_main_scrollregion(self, _event=None) -> None:
-        if not hasattr(self, "main_scroll_canvas"):
-            return
-        canvas = self.main_scroll_canvas
-        canvas.update_idletasks()
-        canvas_width = max(canvas.winfo_width(), 1)
-        canvas_height = max(canvas.winfo_height(), 1)
-        frame = self.main_scroll_frame
-        target_width = max(frame.winfo_reqwidth(), canvas_width)
-        target_height = max(frame.winfo_reqheight(), canvas_height)
-        canvas.itemconfigure(
-            self.main_scroll_window,
-            width=target_width,
-            height=target_height,
-        )
-        canvas.configure(scrollregion=canvas.bbox("all"))
 
-    def _widget_owns_mousewheel(self, widget) -> bool:
-        try:
-            widget_class = str(widget.winfo_class())
-        except tk.TclError:
-            return False
-        return widget_class in {"Text", "Listbox", "TCombobox", "Combobox", "Spinbox"}
-
-    def _mousewheel_units(self, event) -> int:
-        delta = getattr(event, "delta", 0)
-        if delta:
-            units = int(-1 * (delta / 120))
-            if units == 0:
-                units = -1 if delta > 0 else 1
-            return units
-        return 0
-
-    def _on_main_scroll_mousewheel(self, event):
-        if self._widget_owns_mousewheel(event.widget):
-            return None
-        if getattr(event, "state", 0) & 0x0001:
-            return self._on_main_scroll_shift_mousewheel(event)
-        units = self._mousewheel_units(event)
-        if units:
-            self.main_scroll_canvas.yview_scroll(units, "units")
-            return "break"
-        return None
-
-    def _on_main_scroll_shift_mousewheel(self, event):
-        if self._widget_owns_mousewheel(event.widget):
-            return None
-        units = self._mousewheel_units(event)
-        if units:
-            self.main_scroll_canvas.xview_scroll(units, "units")
-            return "break"
-        return None
-
-    def _on_main_scroll_linux_wheel(self, event):
-        if self._widget_owns_mousewheel(event.widget):
-            return None
-        units = -3 if getattr(event, "num", None) == 4 else 3
-        self.main_scroll_canvas.yview_scroll(units, "units")
-        return "break"
 
     def _create_widgets(self):
         """Create GUI widgets with a modern dark theme."""
@@ -241,9 +143,12 @@ class WidgetLayoutMixin:
         content_frame = tk.Frame(main_frame, bg=BG_MAIN)
         content_frame.pack(fill=tk.BOTH, expand=True)
 
+        horizontal_paned = ttk.PanedWindow(content_frame, orient=tk.HORIZONTAL)
+        horizontal_paned.pack(fill=tk.BOTH, expand=True)
+
         # 1. Left panel - Bird's eye view & Speeds
-        left_frame = tk.Frame(content_frame, bg=BG_PANEL)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        left_frame = tk.Frame(horizontal_paned, bg=BG_PANEL)
+        horizontal_paned.add(left_frame, weight=3)
 
         tk.Label(left_frame, text="Bird's Eye View", font=("Segoe UI", 12, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(pady=(10, 5))
 
@@ -251,7 +156,7 @@ class WidgetLayoutMixin:
             left_frame, width=self.bev_canvas_width, height=self.bev_canvas_height,
             bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.traj_canvas.pack(padx=10, pady=(0, 10))
+        self.traj_canvas.pack(padx=10, pady=(0, 10), fill=tk.BOTH, expand=True)
         self.traj_canvas.bind("<Button-1>", self._on_canvas_click)
         self.traj_canvas.bind("<B1-Motion>", self._on_canvas_left_drag)
         self.traj_canvas.bind("<ButtonRelease-1>", self._on_left_release)
@@ -273,7 +178,7 @@ class WidgetLayoutMixin:
             left_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
             bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.speed_canvas.pack(padx=10, pady=(0, 5))
+        self.speed_canvas.pack(padx=10, pady=(0, 5), fill=tk.BOTH, expand=False)
         self.speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "pred"))
         self.speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("pred", None))
         self.speed_canvas.bind("<Button-1>", self._on_speed_canvas_left_down)
@@ -294,7 +199,7 @@ class WidgetLayoutMixin:
             left_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
             bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.gt_speed_canvas.pack(padx=10, pady=(0, 5))
+        self.gt_speed_canvas.pack(padx=10, pady=(0, 5), fill=tk.BOTH, expand=False)
         self.gt_speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "gt"))
         self.gt_speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("gt", None))
         self.gt_speed_canvas.bind("<Button-1>", self._on_gt_speed_canvas_click)
@@ -309,8 +214,8 @@ class WidgetLayoutMixin:
         FlatButton(self.gt_stop_action_frame, "撤回", self._undo_gt_stop_add, bg="#FF9800", padx=16).pack(side=tk.LEFT)
 
         # 2. Middle panel - Camera images with projection
-        middle_frame = tk.Frame(content_frame, bg=BG_PANEL)
-        middle_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        middle_frame = tk.Frame(horizontal_paned, bg=BG_PANEL)
+        horizontal_paned.add(middle_frame, weight=5)
 
         cam_select_frame = tk.Frame(middle_frame, bg=BG_PANEL)
         cam_select_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -356,11 +261,11 @@ class WidgetLayoutMixin:
 
         # 3. Right panel - Trajectory list, CoT, Clusters using PanedWindow
         right_frame = tk.Frame(
-            content_frame,
+            horizontal_paned,
             bg=BG_PANEL,
             width=getattr(self, "right_panel_width", 460),
         )
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH)
+        horizontal_paned.add(right_frame, weight=2)
         right_frame.pack_propagate(False)
 
         style.configure("Dark.TLabelframe", background=BG_PANEL, foreground=FG_PRIMARY)
@@ -511,6 +416,11 @@ class WidgetLayoutMixin:
             font=("Segoe UI", 9), fg="#757575", bg=BG_MAIN,
         ).pack(side=tk.RIGHT)
 
+        # Bind a single resize handler on the root window.  Drawing on canvases
+        # or setting Label images does NOT trigger root <Configure>, so there is
+        # no feedback loop.
+        self.root.bind("<Configure>", self._on_window_configure, add="+")
+
     def _set_projection_camera(self, cam):
         """Set camera for trajectory projection."""
         self.current_cam_for_projection = cam
@@ -653,3 +563,57 @@ class WidgetLayoutMixin:
         self.cot_text.delete("1.0", tk.END)
         self.cot_text.insert(tk.END, cot)
         self.cot_text.configure(state=tk.DISABLED)
+
+    # ------------------------------------------------------------------
+    # Responsive resize – single root-level handler, no feedback loop
+    # ------------------------------------------------------------------
+
+    def _on_window_configure(self, event):
+        """Debounce window resize events; only fire when the root window itself changes."""
+        if event.widget is not self.root:
+            return
+        if hasattr(self, '_resize_after_id') and self._resize_after_id is not None:
+            self.root.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.root.after(200, self._on_window_resize_deferred)
+
+    def _on_window_resize_deferred(self):
+        """Called ~200 ms after the last root resize event.  Updates canvas dimension
+        attributes and triggers a single full redraw.  Safe: only root <Configure>
+        fires this, not canvas/label drawing operations.
+        """
+        self._resize_after_id = None
+
+        # Update BEV canvas dimensions from the actual rendered widget size
+        if hasattr(self, 'traj_canvas'):
+            try:
+                w = self.traj_canvas.winfo_width()
+                h = self.traj_canvas.winfo_height()
+                if w > 10 and h > 10:
+                    self.bev_canvas_width = w
+                    self.bev_canvas_height = h
+                    self.bev_forward_scale = 6.2 * h / 700.0
+                    self.bev_lateral_scale = 10.0 * w / 560.0
+                    self.bev_origin = (
+                        w / 2,
+                        h - max(40, int(65 * (h / 700.0))),
+                    )
+            except Exception:
+                pass
+
+        # Update speed canvas dimensions
+        if hasattr(self, 'speed_canvas'):
+            try:
+                w = self.speed_canvas.winfo_width()
+                h = self.speed_canvas.winfo_height()
+                if w > 10 and h > 10:
+                    self.speed_canvas_width = w
+                    self.speed_canvas_height = h
+            except Exception:
+                pass
+
+        # Trigger a full redraw now that dimensions are updated
+        if hasattr(self, 'trajectories') and self.trajectories:
+            self._draw_trajectories()
+            self._draw_speed_profile()
+            self._draw_gt_speed_profile()
+            self._draw_camera_images()

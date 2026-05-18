@@ -293,15 +293,38 @@ class TrajectoryViewerEnhanced(
         self.scene_combo_width = layout.scene_combo_width
 
     def _try_maximize_root(self) -> None:
+        maximized = False
         try:
             self.root.state("zoomed")
-            return
+            maximized = True
         except tk.TclError:
             pass
+        if not maximized:
+            try:
+                self.root.attributes("-zoomed", True)
+                maximized = True
+            except tk.TclError:
+                pass
+        # After the window manager applies the maximized state, force a
+        # full redraw so all canvases and camera panels use the real screen size.
+        self.root.after(300, self._deferred_fullscreen_refresh)
+
+    def _deferred_fullscreen_refresh(self) -> None:
+        """Called after the window manager applies the maximized state.
+        We synthetically fire the resize pipeline instead of calling _update_display
+        directly, so the debounced handler updates widget dimensions first.
+        """
         try:
-            self.root.attributes("-zoomed", True)
-        except tk.TclError:
-            return
+            self.root.update_idletasks()
+            # Trigger the debounced resize pipeline by scheduling the deferred
+            # handler directly (the root Configure event may not re-fire after
+            # after_idle in some WMs).
+            if hasattr(self, "_on_window_resize_deferred"):
+                if hasattr(self, '_resize_after_id') and self._resize_after_id is not None:
+                    self.root.after_cancel(self._resize_after_id)
+                self._resize_after_id = self.root.after(100, self._on_window_resize_deferred)
+        except Exception:
+            pass
 
 
 __all__ = ["TrajectoryViewerEnhanced"]

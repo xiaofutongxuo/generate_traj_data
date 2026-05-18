@@ -79,7 +79,7 @@ def compute_responsive_layout(screen_width: int, screen_height: int) -> Responsi
     t0_combo_width = 18 if compact else 22
     scene_combo_width = 15 if compact else 18
 
-    start_maximized = screen_width <= 1920 or screen_height <= 1200
+    start_maximized = True  # Always launch maximized for full-screen responsive layout
 
     return ResponsiveLayout(
         window_width=window_width,
