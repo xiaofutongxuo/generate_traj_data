@@ -480,3 +480,53 @@
   - 原始 `ego_history_xyz` 不写回、不覆盖，仍保留为 source data。
 - 验证方式：
   - 新增测试覆盖 history 平滑保持当前帧、降低中间噪声、降低 history 差分速度尖刺，并确认 GUI 取 display-smoothed history 时不会修改 `conv_data` 中的原始 history。
+
+## 028 GUI parquet 写回备份、日志和元数据
+
+- 日期：2026-05-18
+- 需求：TODO-007 希望梳理保存行为和数据版本，避免多个 GUI 操作直接覆盖 active parquet 后难以追踪或恢复。
+- 改动文件：`traj_gui_enhanced/save_audit.py`、`traj_gui_enhanced/mixins/sample_io.py`、`traj_gui_enhanced/mixins/manual_editing.py`、`traj_gui_enhanced/mixins/cluster_controls.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - 新增 `save_audit.py`，集中提供 `apply_gui_edit_metadata()` 和 `write_parquet_with_audit()`。
+  - GUI parquet 写回前会将原文件备份到 `output/.backups/{dataset}/{clip}/`。
+  - GUI parquet 写回后会追加一行到 `output/edit_log.jsonl`，记录操作类型、样本身份、备份路径、写入前后行数和影响行数。
+  - 新增/编辑的 GUI 伪 GT 行写入 `edit_version`、`edited_by_gui`、`edit_time`、`edit_operation`。
+  - 已接入选中轨迹编辑保存、pending delete 确认保存、manual Bezier 追加和 cluster center 追加。
+- 当前行为：
+  - GUI 仍覆盖 active parquet，保持原读取路径不变。
+  - 第一版只覆盖 GUI parquet 写回；`manual_points.json`、cluster center 库文件和 GUI 恢复入口在后续 029 中补齐。
+- 验证方式：
+  - 新增测试覆盖 metadata 递增、审计写回创建备份与 JSONL 日志、选中轨迹保存审计、删除确认保存审计。
+
+## 029 TODO-007 保存审计闭环完善
+
+- 日期：2026-05-18
+- 需求：继续完善 TODO-007，使保存行为和数据版本不只覆盖 parquet 写回，也覆盖 GUI sidecar 文件，并提供 GUI 恢复入口。
+- 改动文件：`traj_gui_enhanced/save_audit.py`、`traj_gui_enhanced/mixins/sample_io.py`、`traj_gui_enhanced/mixins/cluster_controls.py`、`traj_gui_enhanced/mixins/widget_layout.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - `save_audit.py` 新增通用文本文件审计写入、审计日志读取、最近备份查找和从备份恢复 active 文件的能力。
+  - `manual_points.json` 写入接入 `save_manual_points` 日志，旧文件备份到 `output/.backups/files/manual_points/`。
+  - cluster center 分类库和 Bezier center 元数据写入分别接入 `write_cluster_category_file`、`write_bezier_cluster_center_ids` 日志，旧文件备份到 `output/.backups/files/k_means/`。
+  - GUI 全局操作区新增 `View Log` 和 `Restore Backup`；恢复当前 clip parquet 时会先备份当前 active parquet，并记录 `restore_parquet_backup`。
+- 当前行为：
+  - GUI 仍覆盖 active 文件，但 parquet、manual controls 和 cluster center 库的 GUI 写入都已有写前备份和 JSONL 日志。
+  - 离线批处理输出仍不纳入 GUI 审计策略。
+- 验证方式：
+  - 新增测试覆盖文本文件审计、备份恢复、manual points 写入审计、cluster center 文件写入审计和当前 clip parquet 恢复入口。
+
+## 030 TODO-008 Windows GUI 第一版支持
+
+- 日期：2026-05-18
+- 需求：工具需要扩展到 Windows 上使用；本阶段用户明确不要求 Windows 本机模型推理，只需要 Windows 上使用增强 GUI 并进行轨迹扩充。
+- 改动文件：`traj_gui_enhanced/cli.py`、`traj_gui_enhanced/environment.py`、`data_loader.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/trajectory_gui_feature_status_and_todo.md`
+- 主要改动：
+  - GUI CLI 默认路径改为跨平台相对路径：`train_data`、`output`、`calibration`。
+  - GUI CLI 新增环境变量覆盖：`GENERATE_TRAJ_GUI_DATA_ROOT`、`GENERATE_TRAJ_GUI_OUTPUT_DIR`、`GENERATE_TRAJ_GUI_CALIBRATION_DIR`，并兼容 `TRAIN_DATA_ROOT`、`OUTPUT_DIR`、`CALIBRATION_DIR`。
+  - `environment.py` 支持 Windows 平台分支：Windows 下不设置 X11 `DISPLAY`，不加载 Linux `.runtime/tk` fallback，并使用 `os.pathsep` 拼接 path-like 环境变量。
+  - `data_loader.py` 移除无条件插入 `/home/tsingyu/lxh/alpamayo_1.5/src` 的副作用，仅在 `ALPAMAYO_SRC` 或 repo-local `alpamayo_1.5/src` 存在时才加入 `sys.path`。
+  - README 新增 Windows GUI-only PowerShell 安装和启动示例。
+- 当前行为：
+  - Windows 支持范围仅为增强 GUI 浏览、扩充、编辑、删除、保存和审计恢复已有数据/轨迹。
+  - Windows 本机 `run_inference.py` 模型推理仍不在本阶段支持范围内。
+- 验证方式：
+  - 新增测试覆盖跨平台 GUI 默认路径、环境变量覆盖、Windows 环境初始化跳过 Linux fallback、以及 `data_loader` 不再污染 GUI import 的 Linux `sys.path`。

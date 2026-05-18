@@ -33,6 +33,14 @@ from ..speed_utils import *
 from ..projection_utils import *
 from ..cluster_utils import *
 from ..dynamics import optimize_pseudo_gt_trajectory, trajectory_components_from_xyz
+from ..save_audit import (
+    apply_gui_edit_metadata,
+    latest_backup_for_target,
+    read_audit_log_rows,
+    restore_file_from_backup_with_audit,
+    write_text_file_with_audit,
+    write_parquet_with_audit,
+)
 from ..trajectory_identity import drop_trajectory_rows_by_keys, normalize_trajectory_source
 
 class SampleIOMixin:
@@ -454,6 +462,13 @@ class SampleIOMixin:
         dataset_name, clip_stem, t0_us = self.samples[self.current_idx]
         return dataset_name, clip_stem, int(t0_us)
 
+    def _current_audit_sample_identity(self) -> tuple[str, str, int | None]:
+        try:
+            dataset_name, clip_stem, t0_us = self._current_sample_key()
+            return dataset_name, clip_stem, int(t0_us)
+        except Exception:
+            return "", "", None
+
     def _write_manual_points_index(self):
         records = []
         all_keys = (
@@ -497,11 +512,118 @@ class SampleIOMixin:
             })
 
         self.manual_points_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = self.manual_points_file.with_suffix(".json.tmp")
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "samples": records}, f, indent=2)
-            f.write("\n")
-        tmp_file.replace(self.manual_points_file)
+        dataset_name, clip_stem, t0_us = self._current_audit_sample_identity()
+        content = json.dumps({"version": 1, "samples": records}, indent=2) + "\n"
+        write_text_file_with_audit(
+            self.manual_points_file,
+            content,
+            output_dir=self.output_dir,
+            operation="save_manual_points",
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+            t0_us=t0_us,
+            affected_rows=len(records),
+            metadata={"sample_records": len(records)},
+            backup_group="manual_points",
+        )
+
+    def _format_audit_log_row_for_display(self, row: dict) -> str:
+        parts = [
+            str(row.get("edit_time", "")),
+            str(row.get("operation", "")),
+        ]
+        sample_bits = []
+        if row.get("dataset_name"):
+            sample_bits.append(str(row.get("dataset_name")))
+        if row.get("clip_stem"):
+            sample_bits.append(str(row.get("clip_stem")))
+        if row.get("t0_us") is not None:
+            sample_bits.append(f"t0={row.get('t0_us')}")
+        if sample_bits:
+            parts.append(" / ".join(sample_bits))
+        target = row.get("traj_file") or row.get("target_file")
+        if target:
+            parts.append(f"target={target}")
+        if row.get("backup_file"):
+            parts.append(f"backup={row.get('backup_file')}")
+        if row.get("affected_rows") is not None:
+            parts.append(f"affected={row.get('affected_rows')}")
+        return " | ".join(parts)
+
+    def _show_edit_log_window(self):
+        rows = read_audit_log_rows(self.output_dir, limit=120)
+        if not rows:
+            messagebox.showinfo("Edit Log", f"No audit log found at {self.output_dir / 'edit_log.jsonl'}")
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Recent Edit Log")
+        window.geometry("1100x520")
+        frame = tk.Frame(window)
+        frame.pack(fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text = tk.Text(frame, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text.yview)
+        for row in rows:
+            text.insert(tk.END, self._format_audit_log_row_for_display(row) + "\n")
+        text.config(state=tk.DISABLED)
+
+    def _restore_latest_current_clip_backup(self):
+        if bool(getattr(self, "gt_only", False)):
+            messagebox.showwarning(
+                "GT Only",
+                "GT-only mode has no generated trajectory parquet to restore.",
+            )
+            return
+        dataset_name, clip_stem, t0_us = self.samples[self.current_idx]
+        traj_file = self._active_traj_file(dataset_name, clip_stem)
+        latest = latest_backup_for_target(
+            self.output_dir,
+            traj_file,
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+        )
+        if latest is None:
+            messagebox.showwarning(
+                "No Backup",
+                f"No restorable parquet backup was found for {traj_file}.",
+            )
+            return
+
+        backup_file, source_row = latest
+        if not messagebox.askyesno(
+            "Restore Backup",
+            (
+                f"Restore the latest backup for {dataset_name}/{clip_stem}?\n\n"
+                f"Backup: {backup_file}\n"
+                "The current active parquet will be backed up before restore."
+            ),
+        ):
+            return
+
+        restore_file_from_backup_with_audit(
+            traj_file,
+            backup_file,
+            output_dir=self.output_dir,
+            operation="restore_parquet_backup",
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+            t0_us=int(t0_us),
+            metadata={
+                "restored_from_operation": source_row.get("operation"),
+                "restored_from_edit_time": source_row.get("edit_time"),
+            },
+            backup_group=f"{dataset_name}/{clip_stem}",
+        )
+
+        self._load_sample(self.current_idx)
+        self._update_display()
+        messagebox.showinfo(
+            "Restored Backup",
+            f"Restored {backup_file} to {traj_file}.",
+        )
 
     def _load_sample(self, idx: int):
         """Load a sample by index."""
@@ -691,8 +813,22 @@ class SampleIOMixin:
             if key in df.columns and key in traj:
                 df.at[row_idx, key] = np.asarray(traj[key]).tolist()
 
-        traj_file.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(traj_file, index=False)
+        df = apply_gui_edit_metadata(
+            df,
+            row_indices=[row_idx],
+            operation="edit_selected_trajectory",
+        )
+        write_parquet_with_audit(
+            traj_file,
+            df,
+            output_dir=self.output_dir,
+            operation="edit_selected_trajectory",
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+            t0_us=int(t0_us),
+            affected_rows=1,
+            metadata={"sample_idx": int(traj.get("sample_idx", traj_idx))},
+        )
         return True
 
     def _save_results(self):
@@ -731,8 +867,23 @@ class SampleIOMixin:
             deleted_keys=pending_deleted,
         )
         
-        traj_file.parent.mkdir(parents=True, exist_ok=True)
-        df_saved.to_parquet(traj_file, index=False)
+        removed_count = int(len(df) - len(df_saved))
+        write_parquet_with_audit(
+            traj_file,
+            df_saved,
+            output_dir=self.output_dir,
+            operation="delete_trajectories",
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+            t0_us=int(t0_us),
+            affected_rows=removed_count,
+            metadata={
+                "deleted_keys": [
+                    {"t0_us": key[0], "sample_idx": key[1]}
+                    for key in sorted(pending_deleted, key=lambda item: (item[0] or -1, item[1]))
+                ],
+            },
+        )
         self._persist_pending_manual_point_deletes()
 
         self._load_sample(self.current_idx)
@@ -741,5 +892,5 @@ class SampleIOMixin:
         messagebox.showinfo(
             "Saved",
             f"Saved {len(df_saved)} trajectories to {traj_file}\n"
-            f"(Removed {len(df) - len(df_saved)} trajectories)"
+            f"(Removed {removed_count} trajectories)"
         )

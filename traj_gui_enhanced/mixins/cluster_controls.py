@@ -25,6 +25,7 @@ from ..math_utils import *
 from ..speed_utils import *
 from ..projection_utils import *
 from ..cluster_utils import *
+from ..save_audit import apply_gui_edit_metadata, write_text_file_with_audit, write_parquet_with_audit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -172,24 +173,40 @@ class ClusterControlsMixin:
                 if values
             },
         }
-        tmp_file = path.with_suffix(".json.tmp")
-        with tmp_file.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-            f.write("\n")
-        tmp_file.replace(path)
+        content = json.dumps(payload, indent=2) + "\n"
+        write_text_file_with_audit(
+            path,
+            content,
+            output_dir=self.output_dir,
+            operation="write_bezier_cluster_center_ids",
+            affected_rows=sum(len(values) for values in self.bezier_cluster_center_ids.values()),
+            metadata={"categories": sorted(payload["centers"])},
+            backup_group="k_means/bezier_centers",
+        )
 
     def _write_cluster_category_file(self, category: str, records: list[dict]) -> None:
         path = self._cluster_category_file(category)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            f.write("# cluster_centers_xy_v1\n")
-            f.write(f"# category={category}\n")
-            f.write("# ego-local xy: x=forward, y=left; plot right=-y\n")
-            f.write("# columns: CENTER center_id count x0 y0 ... x63 y63\n")
-            for record in sorted(records, key=lambda item: int(item["id"])):
-                traj = np.asarray(record["trajectory"], dtype=np.float64)
-                values = " ".join(f"{v:.6f}" for v in traj[:, :2].reshape(-1))
-                f.write(f"CENTER {int(record['id'])} {int(record.get('count', 1))} {values}\n")
+        lines = [
+            "# cluster_centers_xy_v1",
+            f"# category={category}",
+            "# ego-local xy: x=forward, y=left; plot right=-y",
+            "# columns: CENTER center_id count x0 y0 ... x63 y63",
+        ]
+        for record in sorted(records, key=lambda item: int(item["id"])):
+            traj = np.asarray(record["trajectory"], dtype=np.float64)
+            values = " ".join(f"{v:.6f}" for v in traj[:, :2].reshape(-1))
+            lines.append(f"CENTER {int(record['id'])} {int(record.get('count', 1))} {values}")
+        content = "\n".join(lines) + "\n"
+        write_text_file_with_audit(
+            path,
+            content,
+            output_dir=self.output_dir,
+            operation="write_cluster_category_file",
+            affected_rows=len(records),
+            metadata={"category": category},
+            backup_group=f"k_means/{path.stem}",
+        )
 
     def _cluster_records_for_current_category(self) -> list[dict]:
         if self.cluster_category_var is None:
@@ -330,9 +347,29 @@ class ClusterControlsMixin:
                 row[column] = None
         new_row = pd.DataFrame([{column: row[column] for column in df.columns}])
         df_appended = pd.concat([df, new_row], ignore_index=True)
+        new_row_idx = df_appended.index[-1]
+        df_appended = apply_gui_edit_metadata(
+            df_appended,
+            row_indices=[new_row_idx],
+            operation="append_cluster_center",
+        )
 
-        traj_file.parent.mkdir(parents=True, exist_ok=True)
-        df_appended.to_parquet(traj_file, index=False)
+        write_parquet_with_audit(
+            traj_file,
+            df_appended,
+            output_dir=self.output_dir,
+            operation="append_cluster_center",
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+            t0_us=int(t0_us),
+            affected_rows=1,
+            metadata={
+                "sample_idx": int(row["sample_idx"]),
+                "cluster_id": int(self.cluster_preview_record.get("id", -1))
+                if self.cluster_preview_record is not None
+                else None,
+            },
+        )
 
         self._load_sample(self.current_idx)
         self._update_display()

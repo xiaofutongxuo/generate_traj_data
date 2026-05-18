@@ -366,6 +366,8 @@ class WidgetLayoutMixin:
         FlatButton(action_inner, "Delete (Del)", self._delete_traj, bg="#F44336", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
         FlatButton(action_inner, "Undo Delete", lambda: self._undo_delete_traj(redraw=True), bg="#4CAF50", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
         FlatButton(action_inner, "Confirm Save (Ctrl+S)", self._save_results, bg="#2196F3", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(action_inner, "View Log", self._show_edit_log_window, bg="#607D8B", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(action_inner, "Restore Backup", self._restore_latest_current_clip_backup, bg="#795548", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
 
         # --- Status & Help ---
         footer_frame = tk.Frame(main_frame, bg=BG_MAIN)

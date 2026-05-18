@@ -23,7 +23,24 @@ else:
     except ModuleNotFoundError:
         torch = None
 
-sys.path.insert(0, "/home/tsingyu/lxh/alpamayo_1.5/src")
+
+def _configure_optional_alpamayo_src_path() -> None:
+    repo_root = Path(__file__).resolve().parent
+    for candidate in (
+        os.environ.get("ALPAMAYO_SRC"),
+        repo_root / "alpamayo_1.5" / "src",
+    ):
+        if not candidate:
+            continue
+        candidate_path = Path(candidate)
+        if candidate_path.exists():
+            candidate_str = str(candidate_path)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+            return
+
+
+_configure_optional_alpamayo_src_path()
 
 CAMERA_FILE_MAP = {
     "FL": 0, "FC": 1, "FR": 2, "RL": 3, "RC": 4, "RR": 5,

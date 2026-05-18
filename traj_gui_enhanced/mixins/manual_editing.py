@@ -26,6 +26,7 @@ from ..speed_utils import *
 from ..projection_utils import *
 from ..cluster_utils import *
 from ..dynamics import optimize_pseudo_gt_trajectory, trajectory_components_from_xyz
+from ..save_audit import apply_gui_edit_metadata, write_parquet_with_audit
 
 class ManualEditingMixin:
 
@@ -517,9 +518,24 @@ class ManualEditingMixin:
                 row[column] = None
         new_row = pd.DataFrame([{column: row[column] for column in df.columns}])
         df_appended = pd.concat([df, new_row], ignore_index=True)
+        new_row_idx = df_appended.index[-1]
+        df_appended = apply_gui_edit_metadata(
+            df_appended,
+            row_indices=[new_row_idx],
+            operation="append_manual_bezier",
+        )
 
-        traj_file.parent.mkdir(parents=True, exist_ok=True)
-        df_appended.to_parquet(traj_file, index=False)
+        write_parquet_with_audit(
+            traj_file,
+            df_appended,
+            output_dir=self.output_dir,
+            operation="append_manual_bezier",
+            dataset_name=dataset_name,
+            clip_stem=clip_stem,
+            t0_us=int(t0_us),
+            affected_rows=1,
+            metadata={"sample_idx": int(row["sample_idx"])},
+        )
 
         self._persist_current_manual_points()
         self._load_sample(self.current_idx)

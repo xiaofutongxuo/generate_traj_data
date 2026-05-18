@@ -79,6 +79,45 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 GUI 会打开 Tk 窗口。本机如果 `$DISPLAY` 未设置，增强 GUI 会尝试自动使用本地
 `:1` 桌面显示；远程或 headless session 需要 VNC、桌面会话或 SSH X11 forwarding。
 
+### Windows GUI-Only Usage
+
+Windows first-version support is for the enhanced GUI workflow only: browsing existing samples,
+manual Bezier expansion, cluster-center expansion, trajectory editing/deletion, parquet writes, and
+save audit/backup restore. Windows local Alpamayo model inference is not covered.
+
+Install Python 3.10 or 3.11 from python.org with Tk support enabled, then create a virtual
+environment from PowerShell:
+
+```powershell
+cd D:\path\to\generate_traj_data
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install numpy pandas pyarrow scipy pillow opencv-python matplotlib scikit-learn
+```
+
+Launch the GUI with explicit Windows paths:
+
+```powershell
+.\.venv\Scripts\python.exe trajectory_gui_enhanced.py `
+  --data_root D:\traj\train_data `
+  --output_dir D:\traj\output `
+  --calibration_dir D:\traj\calibration `
+  --no_restore_last
+```
+
+Alternatively, set GUI-specific environment variables and omit the path flags:
+
+```powershell
+$env:GENERATE_TRAJ_GUI_DATA_ROOT = "D:\traj\train_data"
+$env:GENERATE_TRAJ_GUI_OUTPUT_DIR = "D:\traj\output"
+$env:GENERATE_TRAJ_GUI_CALIBRATION_DIR = "D:\traj\calibration"
+.\.venv\Scripts\python.exe trajectory_gui_enhanced.py --no_restore_last
+```
+
+The GUI CLI defaults are cross-platform relative paths (`train_data`, `output`, `calibration`) when
+these variables are not set. On Windows, runtime setup does not touch X11 `DISPLAY` or the
+Linux-only `.runtime/tk` fallback.
+
 GUI 默认 `--index_mode video_frames --frame_stride 1`，会按
 `data-timestamps/{clip}.timestamps.parquet` 中的主视频帧逐帧建索引。状态栏会显示当前
 clip 覆盖率，例如 `Video t0: N | Generated t0: M | Missing: K`，并标出当前帧是否已有
@@ -270,6 +309,8 @@ GUI 会优先读取每个原始数据集目录下的本地 XML 标定：
 output/
 ├── cot.jsonl
 ├── .trajectory_gui_state.json
+├── edit_log.jsonl
+├── .backups/
 └── {dataset_name}/
     └── {clip_stem}.egomotion.parquet
 ```
@@ -279,12 +320,25 @@ Real GT is loaded from `/home/ubuntu/Public/train_data` and is not written to ou
 Important columns include:
 
 ```text
-t0_us, sample_idx, source, timestamp, qx, qy, qz, qw, x, y, z, vx, vy, vz, curvature
+t0_us, sample_idx, source, timestamp, qx, qy, qz, qw, x, y, z, vx, vy, vz,
+curvature, edit_version, edited_by_gui, edit_time, edit_operation
 ```
 
 Common `source` values are `vla`, `manual_bezier`, `cluster_center`, and legacy
 `rule_cluster`. Legacy output rows with `source=gt` are ignored by the GUI's pseudo-GT
 list and coverage counts; they are not treated as source-data GT.
+
+Enhanced GUI writes to active parquet in place, but every GUI parquet write first backs up the
+previous file under `output/.backups/{dataset}/{clip}/` and appends one JSON row to
+`output/edit_log.jsonl`. GUI-created or GUI-edited rows receive `edit_version`,
+`edited_by_gui`, `edit_time`, and `edit_operation`; older rows without these columns remain
+readable.
+
+The same audit log is used for GUI sidecar edits. `output/manual_points.json` is backed up under
+`output/.backups/files/manual_points/`; cluster-center library edits are backed up under
+`output/.backups/files/k_means/`. In the GUI, `View Log` shows recent audit rows and
+`Restore Backup` restores the latest backup for the current clip parquet after first backing up
+the current active file.
 
 Before pseudo-GT rows are written, VLA output, manual Bezier rows, cluster-center rows, and
 saved speed edits are passed through `traj_gui_enhanced.dynamics` for conservative speed,
@@ -317,18 +371,22 @@ Use `trajectory_gui_enhanced.py` for review and manual augmentation:
   are filtered out.
 - Delete generated trajectories with `Delete` / `Backspace`; `Ctrl+S` or `Save` writes the active
   parquet file in place after removing discarded rows.
+- Use `View Log` to inspect recent GUI save operations, and `Restore Backup` to restore the latest
+  backup for the current clip parquet.
 - Use `Edit Traj` on a selected pseudo-GT row to show BEV keyframe handles. Drag handles to reshape
   the saved trajectory, then use `Save Edit`, `Cancel Edit`, or `Restore Edit`.
 - Enable `Draw Bezier`, add control points on BEV or the `FC` camera view, drag points to adjust,
   and inspect the cyan preview in BEV and camera projection.
 - `Save Curve Traj` appends the manual Bezier trajectory to the current clip parquet.
-- Manual controls and stop markers are stored in `output/manual_points.json`.
+- Manual controls and stop markers are stored in `output/manual_points.json`; GUI writes are backed
+  up and logged.
 - The speed panels can inspect predicted pseudo-GT speed profiles and source-data GT speed profiles.
   GT speed is computed from source GT xyz differences and lightly smoothed for display to reduce
   raw-position noise spikes. History trajectory display is also lightly denoised with the current
   frame fixed, and the green history speed curve uses that display-smoothed history. Pseudo-GT edits
   write to output parquet; source-data GT is displayed for reference and is not written to output parquet.
-- Cluster-center preview and Bezier-center saving use files under `k_means/`.
+- Cluster-center preview and Bezier-center saving use files under `k_means/`; GUI edits to those
+  files are backed up and logged.
 
 ## Validation
 

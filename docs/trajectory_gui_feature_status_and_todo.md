@@ -36,8 +36,9 @@ traj_gui_enhanced/*_utils.py     # 轨迹、速度、投影、cluster 工具函�
 traj_gui_enhanced/mixins/        # GUI 功能区：I/O、布局、导航、手工编辑、速度、绘制等
 ```
 
-注意：GUI 在远程 X11 forwarding 下可能比较慢；如果 `$DISPLAY` 为空，当前环境设置会自动使用本机
-`DISPLAY=:1`，窗口会出现在服务器桌面/VNC，而不是本地 VS Code Remote SSH 终端。
+注意：GUI 在 Linux 远程 X11 forwarding 下可能比较慢；如果 `$DISPLAY` 为空，当前环境设置会自动使用本机
+`DISPLAY=:1`，窗口会出现在服务器桌面/VNC，而不是本地 VS Code Remote SSH 终端。Windows 下不会设置
+X11 `DISPLAY`。
 
 ## 2. 当前已实现功能
 
@@ -195,9 +196,11 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - `$DISPLAY` 为空时会自动设置为 `:1`，容易把窗口开到服务器本机桌面，而不是用户 X forwarding 会话。
 - X11 forwarding 下速度图 hover 会触发 BEV、速度图和相机图像全量重绘，可能导致交互很慢，表现为“能显示但不好操作”。
 
-### 3.4 CLI 默认路径仍有旧路径
+### 3.4 CLI 路径默认值与当前机器路径
 
-`traj_gui_enhanced/cli.py` 中 `--data_root` 和 `--calibration_dir` 默认值仍是 `/home/tsingyu/...`。README 已建议显式传参；当前标定实际优先跟随 `--data_root` 下的数据集本地 XML，`--calibration_dir` 只是旧 JSONL 兜底目录。长期应改为环境变量或项目配置。
+`traj_gui_enhanced/cli.py` 的 GUI 默认值已改为跨平台相对路径，并支持环境变量覆盖。README 仍建议在当前
+Ubuntu 机器上显式传入真实数据路径；当前标定实际优先跟随 `--data_root` 下的数据集本地 XML，
+`--calibration_dir` 只是旧 JSONL 兜底目录。
 
 ### 3.5 GT 与 output 语义风险
 
@@ -219,9 +222,16 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - cluster center 文件写入和删除；
 - GUI 事件绑定和点击/拖拽流程。
 
-### 3.7 Windows 支持不足
+### 3.7 Windows 支持仍需实机验收
 
-当前代码和文档大量依赖 Linux 绝对路径、X11 DISPLAY、Linux `.runtime/tk` 结构和 shell 命令。核心 Python/Tk 逻辑理论上可迁移，但目前没有 Windows 启动、依赖、路径和 GUI 行为验证。
+当前增强 GUI 已做第一版跨平台清理：GUI CLI 默认路径不再硬编码 `/home/...`，Windows 下不会设置 X11
+`DISPLAY`，也不会尝试加载 Linux `.runtime/tk` 里的 `.so` 文件。README 已补充 PowerShell
+启动方式。
+
+仍需注意：
+
+- Windows 支持范围只覆盖增强 GUI 浏览、扩充、编辑、删除、保存和审计恢复；不覆盖 Windows 本机模型推理。
+- 仍需要在 Windows 实机上验证 Tk 窗口、OpenCV 视频读取、parquet 读写和大数据路径性能。
 
 ## 4. 新需求 TODO List
 
@@ -428,43 +438,82 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - 是否超过加速度阈值；
 - 是否建议优化。
 
-### P2 TODO-007 梳理保存行为和数据版本
+### P2 TODO-007 梳理保存行为和数据版本（已完成）
 
-当前多个操作会直接写回 active parquet。建议建立更清晰的数据版本策略：
+当前状态：
 
-- 明确哪些操作是立即写回，哪些操作只是 GUI 内临时状态。
-- 增加写回前备份或 undo 文件，例如 `.bak` 或操作日志。
-- 在 parquet 中增加 `source`、`edit_version`、`edited_by_gui`、`edit_time` 等元数据列。
-- README 和优化日志同步更新真实保存行为。
+- 增强 GUI 仍直接写回 active parquet，保持现有读取路径和覆盖率统计不变。
+- 每次 GUI parquet 写回前，会自动把原 parquet 复制到：
 
-### P3 TODO-008 Windows 系统支持
+```text
+output/.backups/{dataset}/{clip}/{timestamp}-{operation}-{id}.egomotion.parquet
+```
+
+- 每次 GUI parquet 写回后，会追加一行 JSON 到：
+
+```text
+output/edit_log.jsonl
+```
+
+- 日志记录 `operation`、`dataset_name`、`clip_stem`、`t0_us`、`traj_file`、`backup_file`、
+  `rows_before`、`rows_after`、`affected_rows` 和可选 `metadata`。
+- GUI 新增/编辑的伪 GT 行会带上 `edit_version`、`edited_by_gui`、`edit_time`、
+  `edit_operation`；旧 parquet 没有这些列也能继续读取。
+- 已接入的 GUI parquet 写回路径包括：
+  - `Edit Traj` / 速度编辑保存选中伪 GT 行；
+  - `Confirm Save (Ctrl+S)` 确认删除 pending delete 行；
+  - `Save Curve Traj` 追加 manual Bezier 轨迹；
+  - cluster center `Confirm Save` 追加 cluster 轨迹。
+- `manual_points.json` 写入也会记录 `save_manual_points` 审计日志，并把旧文件备份到：
+
+```text
+output/.backups/files/manual_points/
+```
+
+- cluster center 库文件写入也会记录审计日志：
+  - 分类中心文件写入操作为 `write_cluster_category_file`；
+  - Bezier center 元数据写入操作为 `write_bezier_cluster_center_ids`；
+  - 旧文件备份到 `output/.backups/files/k_means/` 下。
+- GUI 底部全局操作区新增：
+  - `View Log`：查看最近 `edit_log.jsonl` 记录；
+  - `Restore Backup`：恢复当前 dataset/clip active parquet 的最近一次备份。恢复前会先备份当前 active parquet，并记录 `restore_parquet_backup` 日志，因此恢复操作本身也可追溯。
+
+后续可选增强：
+
+- 如果后续不再希望覆盖 active parquet，再升级为完整版本目录或版本选择器。
+
+### P3 TODO-008 Windows 系统支持（GUI 第一版已实现，待 Windows 实机验收）
 
 需求来源：希望工具支持 Windows 使用。
 
 当前状态：
 
-- 当前默认路径、X11 DISPLAY、`.runtime/tk` fallback、README 命令都偏 Linux。
-- 核心 GUI 使用 Tk，理论上可跨平台；但数据路径、依赖安装、视频读取和性能需要单独验证。
+- 本阶段明确不覆盖 Windows 本机模型推理，只支持增强 GUI 使用已有 `train_data` 和 `output` 做轨迹浏览、扩充、编辑、删除、保存和审计恢复。
+- `traj_gui_enhanced/cli.py` 的 GUI 默认路径已经改为跨平台相对路径，并支持环境变量：
+  - `GENERATE_TRAJ_GUI_DATA_ROOT`
+  - `GENERATE_TRAJ_GUI_OUTPUT_DIR`
+  - `GENERATE_TRAJ_GUI_CALIBRATION_DIR`
+  - 同时兼容旧的 `TRAIN_DATA_ROOT`、`OUTPUT_DIR`、`CALIBRATION_DIR`。
+- `traj_gui_enhanced/environment.py` 已区分 Windows/Linux：
+  - Windows 下不设置 X11 `DISPLAY`；
+  - Windows 下不使用 Linux `.runtime/tk` fallback；
+  - PATH-like 环境变量拼接使用 `os.pathsep`。
+- `data_loader.py` 不再无条件插入 `/home/tsingyu/lxh/alpamayo_1.5/src`，避免 GUI import 时污染 Windows `sys.path`。
+- README 已新增 Windows GUI-only PowerShell 安装和启动说明。
+- 已新增单元测试覆盖 CLI 默认路径、环境变量覆盖、Windows 环境初始化和 Linux-only `sys.path` 副作用清理。
 
-建议实现方向：
+待 Windows 实机验收：
 
-- 所有默认路径改为环境变量或 config 文件，不硬编码 Linux 用户路径。
-- 使用 `pathlib` 保持路径兼容；避免 shell-only 命令进入 Python 逻辑。
-- 提供 Windows README 小节：
-  - Python 版本；
-  - 依赖安装；
-  - 数据目录映射；
-  - GUI 启动命令；
-  - OpenCV 视频读取注意事项。
-- 在 Windows 上至少验证：
-  - `python trajectory_gui_enhanced.py --help`
-  - import `TrajectoryViewerEnhanced`
-  - 打开一个最小样本 GUI
-  - parquet 读写
+- `python trajectory_gui_enhanced.py --help`
+- import `TrajectoryViewerEnhanced`
+- 打开一个最小样本 GUI
+- 样本切换、轨迹选择、manual Bezier/cluster center 扩充、删除、保存
+- parquet/`manual_points.json`/cluster center 文件备份和 `edit_log.jsonl` 写入
+- OpenCV 视频读取是否需要额外 codec 或路径转义处理
 
 验收建议：
 
-- Windows 本机能打开 GUI 并完成样本切换、轨迹选择、保存/取消类操作。
+- Windows 本机能打开 GUI 并完成样本切换、轨迹选择、轨迹扩充、保存/取消类操作。
 - Linux 现有命令不回归。
 
 ## 5. 建议近期维护顺序
@@ -474,11 +523,12 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 3. TODO-003 已完成：扩充轨迹 staged delete、撤销和确认保存已经可用。
 4. TODO-004 代码闭环已完成：基础 dynamics、保存前优化、已保存轨迹 BEV 关键帧编辑、接受/取消/恢复原状和编辑状态保护已经接入；下一步主要是真实 GUI 验收和手感调参。
 5. TODO-005 已实现代码闭环：cluster center 未保存 preview 可通过 `Hide` 隐藏，cluster preview 切换/拖拽后 `Diversity Speed Profile` 有回归测试保护；仍建议真实 GUI 验收按钮位置和交互手感。
-6. 最后做 TODO-008：Windows 支持属于平台化工作，应在核心数据和保存语义稳定后再推进。
+6. TODO-007 已完成：GUI parquet、`manual_points.json` 和 cluster center 库文件写回前自动备份，写回后记录 `edit_log.jsonl`；GUI 提供日志查看和当前 clip parquet 备份恢复入口。
+7. TODO-008 GUI 第一版已实现：路径默认值、环境初始化、Windows README 和回归测试已补齐；下一步是 Windows 实机验收。
 
 ## 6. 待确认问题
 
 - “完整数据所有帧”已确认指所有主视频帧；默认不要求完整 history，开头无历史帧时不显示 history；但需要完整 future，若跨 clip 连续则接续，若尾部或大缺口导致 future 不足则过滤。
 - 已明确：扩充/伪 GT 包括 VLA 生成轨迹、manual Bezier、cluster center 等所有非真实 GT output 行。
 - 伪 GT 编辑目前已覆盖速度曲线保存前优化和 BEV 关键帧/终点几何编辑；仍需根据真实 GUI 试用调整交互细节。
-- 保存策略是否允许继续直接覆盖 output parquet，还是需要引入备份/版本目录？
+- 保存策略当前采用“继续直接覆盖 active 文件 + 写前备份 + 操作日志”的折中方案；如果后续不希望覆盖 active 文件，可再升级为完整版本目录或版本选择器。
