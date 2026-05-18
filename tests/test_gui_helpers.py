@@ -1,4 +1,5 @@
 import math
+import json
 from pathlib import Path
 import tempfile
 import time
@@ -14,7 +15,7 @@ from frame_index import (
 )
 from data_loader import filter_t0s_with_full_future
 from calibration_loader import load_calibration_for_segment
-from traj_gui_enhanced.constants import HISTORY_SPEED_COLOR_HEX
+from traj_gui_enhanced.constants import HISTORY_SPEED_COLOR_HEX, SPEED_EDIT_LOCAL_RADIUS_FRAMES
 from traj_gui_enhanced.dynamics import (
     DynamicsLimits,
     deform_trajectory_by_keyframe_drag,
@@ -27,6 +28,7 @@ from traj_gui_enhanced.environment import setup_environment
 from traj_gui_enhanced.math_utils import _rgb_to_hex, _trajectory_base_color, _resample_curve_by_distance
 from traj_gui_enhanced.mixins.cluster_controls import ClusterControlsMixin
 from traj_gui_enhanced.mixins.delete_controls import DeleteControlsMixin
+from traj_gui_enhanced.mixins.navigation import NavigationMixin
 from traj_gui_enhanced.mixins.sample_io import SampleIOMixin
 from traj_gui_enhanced.mixins.saved_traj_editing import SavedTrajectoryEditingMixin
 from traj_gui_enhanced.mixins.speed_controls import SpeedControlsMixin
@@ -62,6 +64,31 @@ class GuiHelperTests(unittest.TestCase):
             {
                 "timestamp": ts,
                 "x": ts.astype(np.float64) / 100_000.0,
+                "y": np.zeros(len(ts), dtype=np.float64),
+                "z": np.zeros(len(ts), dtype=np.float64),
+                "qx": np.zeros(len(ts), dtype=np.float64),
+                "qy": np.zeros(len(ts), dtype=np.float64),
+                "qz": np.zeros(len(ts), dtype=np.float64),
+                "qw": np.ones(len(ts), dtype=np.float64),
+                "vx": np.ones(len(ts), dtype=np.float64),
+                "vy": np.zeros(len(ts), dtype=np.float64),
+                "vz": np.zeros(len(ts), dtype=np.float64),
+            }
+        ).to_parquet(path)
+
+    def _write_egomotion_xyz_file(
+        self,
+        path: Path,
+        timestamps: list[int],
+        x_values: list[float],
+    ) -> None:
+        ts = np.asarray(timestamps, dtype=np.int64)
+        x = np.asarray(x_values, dtype=np.float64)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "timestamp": ts,
+                "x": x,
                 "y": np.zeros(len(ts), dtype=np.float64),
                 "z": np.zeros(len(ts), dtype=np.float64),
                 "qx": np.zeros(len(ts), dtype=np.float64),
@@ -180,6 +207,248 @@ class GuiHelperTests(unittest.TestCase):
         self.assertEqual(path.name, "stop.txt")
         self.assertEqual(path.parent.name, "k_means")
         self.assertEqual(path.parent.parent.name, "generate_traj_data")
+
+    def test_cluster_preview_hide_clears_unsaved_preview_only(self):
+        class Viewer(ClusterControlsMixin):
+            def __init__(self):
+                self.update_count = 0
+
+            def _update_display(self):
+                self.update_count += 1
+
+        viewer = Viewer()
+        viewer.cluster_preview_record = {"id": 3}
+        viewer.cluster_preview_traj = np.ones((4, 3), dtype=np.float32)
+        viewer.cluster_preview_is_edited = True
+        viewer.trajectories = [{"source": "cluster_center", "x": np.array([1.0])}]
+
+        viewer._hide_cluster_preview()
+
+        self.assertIsNone(viewer.cluster_preview_record)
+        self.assertIsNone(viewer.cluster_preview_traj)
+        self.assertFalse(viewer.cluster_preview_is_edited)
+        self.assertEqual(len(viewer.trajectories), 1)
+        self.assertEqual(viewer.trajectories[0]["source"], "cluster_center")
+        np.testing.assert_allclose(viewer.trajectories[0]["x"], [1.0])
+        self.assertEqual(viewer.update_count, 1)
+
+    def test_global_trajectory_arrow_keys_defer_to_trajectory_listbox(self):
+        class Viewer(NavigationMixin):
+            def __init__(self):
+                self.prev_calls = 0
+                self.next_calls = 0
+                self.traj_listbox = object()
+
+            def _prev_traj(self):
+                self.prev_calls += 1
+
+            def _next_traj(self):
+                self.next_calls += 1
+
+        class Event:
+            def __init__(self, widget):
+                self.widget = widget
+
+        viewer = Viewer()
+
+        self.assertIsNone(viewer._on_global_prev_traj_key(Event(viewer.traj_listbox)))
+        self.assertIsNone(viewer._on_global_next_traj_key(Event(viewer.traj_listbox)))
+        self.assertEqual(viewer.prev_calls, 0)
+        self.assertEqual(viewer.next_calls, 0)
+
+        self.assertEqual(viewer._on_global_prev_traj_key(Event(object())), "break")
+        self.assertEqual(viewer._on_global_next_traj_key(Event(object())), "break")
+        self.assertEqual(viewer.prev_calls, 1)
+        self.assertEqual(viewer.next_calls, 1)
+
+    def test_dropdown_arrow_keys_bind_to_trajectory_navigation(self):
+        class Viewer(NavigationMixin):
+            pass
+
+        class Dropdown:
+            def __init__(self):
+                self.bindings = {}
+
+            def bind(self, sequence, callback):
+                self.bindings[sequence] = callback
+
+        viewer = Viewer()
+        dropdown = Dropdown()
+
+        viewer._bind_arrow_keys_for_trajectory_navigation(dropdown)
+
+        self.assertEqual(dropdown.bindings["<Up>"], viewer._on_global_prev_traj_key)
+        self.assertEqual(dropdown.bindings["<Down>"], viewer._on_global_next_traj_key)
+
+    def test_scene_filtered_sample_navigation_stays_in_dataset_and_scene(self):
+        class Viewer(NavigationMixin):
+            pass
+
+        viewer = Viewer()
+        viewer.samples = [
+            ("dataset_a", "clip_1", 100),
+            ("dataset_a", "clip_1", 200),
+            ("dataset_a", "clip_2", 300),
+            ("dataset_b", "clip_1", 400),
+            ("dataset_a", "clip_3", 500),
+        ]
+        viewer.scene_filter_var = None
+        viewer.scene_label_by_sample = {
+            ("dataset_a", "clip_1", 100): "straight",
+            ("dataset_a", "clip_1", 200): "turn",
+            ("dataset_a", "clip_2", 300): "straight",
+            ("dataset_b", "clip_1", 400): "straight",
+            ("dataset_a", "clip_3", 500): "straight",
+        }
+        viewer.current_idx = 0
+
+        self.assertEqual(viewer._scene_filtered_neighbor_index(1), 1)
+
+        viewer.scene_filter_value = "straight"
+        self.assertEqual(viewer._scene_filtered_neighbor_index(1), 2)
+
+        viewer.current_idx = 2
+        self.assertEqual(viewer._scene_filtered_neighbor_index(1), 4)
+        self.assertEqual(viewer._scene_filtered_neighbor_index(-1), 0)
+
+    def test_scene_filtered_sample_navigation_none_uses_normal_order(self):
+        class Viewer(NavigationMixin):
+            pass
+
+        viewer = Viewer()
+        viewer.samples = [
+            ("dataset_a", "clip_1", 100),
+            ("dataset_a", "clip_1", 200),
+            ("dataset_b", "clip_1", 300),
+        ]
+        viewer.scene_filter_value = "None"
+        viewer.scene_label_by_sample = {}
+        viewer.current_idx = 1
+
+        self.assertEqual(viewer._scene_filtered_neighbor_index(1), 2)
+        self.assertEqual(viewer._scene_filtered_neighbor_index(-1), 0)
+
+    def test_scene_filter_selection_jumps_to_first_matching_scene_in_current_dataset(self):
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        class Viewer(NavigationMixin):
+            def _load_sample(self, idx):
+                self.current_idx = int(idx)
+                self.loaded_idx = int(idx)
+
+            def _update_display(self):
+                self.updated = True
+
+        viewer = Viewer()
+        viewer.samples = [
+            ("dataset_a", "clip_1", 100),
+            ("dataset_a", "clip_1", 200),
+            ("dataset_a", "clip_2", 300),
+            ("dataset_b", "clip_1", 400),
+            ("dataset_a", "clip_3", 500),
+        ]
+        viewer.scene_label_by_sample = {
+            ("dataset_a", "clip_1", 100): "straight",
+            ("dataset_a", "clip_1", 200): "turn",
+            ("dataset_a", "clip_2", 300): "straight",
+            ("dataset_b", "clip_1", 400): "straight",
+            ("dataset_a", "clip_3", 500): "straight",
+        }
+        viewer.current_idx = 2
+        viewer.scene_filter_var = Var("straight")
+        viewer.scene_filter_value = "None"
+        viewer.speed_edit_active = False
+        viewer.loaded_idx = None
+        viewer.updated = False
+
+        viewer._on_scene_filter_selected()
+
+        self.assertEqual(viewer.scene_filter_value, "straight")
+        self.assertEqual(viewer.loaded_idx, 0)
+        self.assertEqual(viewer.current_idx, 0)
+        self.assertTrue(viewer.updated)
+
+    def test_scene_filter_selection_none_keeps_current_sample(self):
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class Viewer(NavigationMixin):
+            def _load_sample(self, idx):
+                self.loaded_idx = int(idx)
+
+            def _update_display(self):
+                self.updated = True
+
+        viewer = Viewer()
+        viewer.samples = [("dataset_a", "clip_1", 100), ("dataset_a", "clip_1", 200)]
+        viewer.scene_label_by_sample = {("dataset_a", "clip_1", 100): "straight"}
+        viewer.current_idx = 1
+        viewer.scene_filter_var = Var("None")
+        viewer.scene_filter_value = "straight"
+        viewer.loaded_idx = None
+        viewer.updated = False
+
+        viewer._on_scene_filter_selected()
+
+        self.assertEqual(viewer.scene_filter_value, "None")
+        self.assertIsNone(viewer.loaded_idx)
+        self.assertFalse(viewer.updated)
+
+    def test_scene_label_index_loads_labels_for_samples(self):
+        from traj_gui_enhanced.scene_labels import build_scene_label_index
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            dataset_dir = root / "dataset_a"
+            dataset_dir.mkdir()
+            (dataset_dir / "scene_labels.json").write_text(
+                json.dumps(
+                    {
+                        "clips": [
+                            {
+                                "clip": "clip_1",
+                                "points": [
+                                    {
+                                        "timestamp": 100,
+                                        "scenario_type": "straight",
+                                    },
+                                    {
+                                        "timestamp": 200,
+                                        "scenario_type": "lane_change",
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            sample_scene, scenes_by_dataset = build_scene_label_index(
+                root,
+                [
+                    ("dataset_a", "clip_1", 100),
+                    ("dataset_a", "clip_1", 200),
+                    ("dataset_a", "clip_1", 300),
+                ],
+            )
+
+        self.assertEqual(sample_scene[("dataset_a", "clip_1", 100)], "straight")
+        self.assertEqual(sample_scene[("dataset_a", "clip_1", 200)], "lane_change")
+        self.assertNotIn(("dataset_a", "clip_1", 300), sample_scene)
+        self.assertEqual(scenes_by_dataset["dataset_a"], ["lane_change", "straight"])
 
     def test_valid_video_frame_indices_default_covers_every_video_frame(self):
         indices = valid_video_frame_indices(
@@ -428,9 +697,37 @@ class GuiHelperTests(unittest.TestCase):
                 num_future_steps=4,
                 time_step=0.1,
                 max_gap_seconds=0.3,
+                clip_stem="clip_a",
             )
 
         self.assertEqual(filtered, [100_000])
+
+    def test_full_future_filter_rejects_spatial_jump_between_clips(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ego_dir = root / "dataset_converted" / "data-egomotion"
+            self._write_egomotion_xyz_file(
+                ego_dir / "clip_a.egomotion.parquet",
+                [0, 100_000, 200_000],
+                [0.0, 1.0, 2.0],
+            )
+            self._write_egomotion_xyz_file(
+                ego_dir / "clip_b.egomotion.parquet",
+                [300_000, 400_000, 500_000],
+                [300.0, 301.0, 302.0],
+            )
+
+            filtered = filter_t0s_with_full_future(
+                root,
+                "dataset_converted",
+                [100_000],
+                num_future_steps=4,
+                time_step=0.1,
+                max_gap_seconds=0.3,
+                clip_stem="clip_a",
+            )
+
+        self.assertEqual(filtered, [])
 
     def test_full_future_filter_drops_tail_without_enough_future(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -724,6 +1021,35 @@ class GuiHelperTests(unittest.TestCase):
         self.assertEqual(len(smoothed_speed), len(raw_speed))
         self.assertLess(float(np.max(smoothed_speed)), float(np.max(raw_speed)))
 
+    def test_smoothed_history_speed_profile_preserves_t0_transition_speed(self):
+        history_xyz = np.column_stack(
+            [
+                np.array([
+                    -2.10, -1.90, -1.70, -1.50,
+                    -1.30, -1.10, -0.90, -0.70,
+                    -0.50, -0.35, -0.22, -0.12,
+                    -0.06, -0.03, -0.01, 0.00,
+                ]),
+                np.zeros(16),
+                np.zeros(16),
+            ]
+        )
+
+        smoothed_xyz = _smooth_history_xyz_for_display(history_xyz, passes=2)
+        expected_t0_speed = _history_speed_profile_from_xyz(
+            smoothed_xyz,
+            dt_seconds=0.1,
+        )[-1]
+        smoothed_speed = _smoothed_history_speed_profile_from_xyz(
+            history_xyz,
+            dt_seconds=0.1,
+            xyz_passes=2,
+            speed_passes=1,
+        )
+
+        self.assertEqual(len(smoothed_speed), len(history_xyz))
+        np.testing.assert_allclose(smoothed_speed[-1], expected_t0_speed, atol=1e-9)
+
     def test_speed_controls_expose_history_speed_source_and_points(self):
         class Viewer(SpeedControlsMixin):
             pass
@@ -772,6 +1098,115 @@ class GuiHelperTests(unittest.TestCase):
             [False, False, False, True]
         ).reshape(1, 1, 4)
         self.assertIsNone(viewer._history_points_xyz())
+
+    def test_speed_controls_keeps_velocity_history_when_position_history_is_short(self):
+        class Viewer(SpeedControlsMixin):
+            pass
+
+        viewer = Viewer()
+        viewer.conv_data = {
+            "ego_history_xyz": np.zeros((1, 1, 4, 3), dtype=np.float32),
+            "ego_history_valid_mask": np.array(
+                [False, False, False, True],
+                dtype=bool,
+            ).reshape(1, 1, 4),
+            "ego_history_speed_mps": np.array(
+                [3.0, 4.0, 5.0, 6.0],
+                dtype=np.float32,
+            ).reshape(1, 1, 4),
+            "ego_history_speed_valid_mask": np.ones((1, 1, 4), dtype=bool),
+        }
+
+        label, speed, _stops, color = viewer._history_speed_profile_source()
+
+        self.assertEqual(label, "History")
+        np.testing.assert_allclose(speed, [3.0, 4.0, 5.0, 6.0])
+        self.assertEqual(color, HISTORY_SPEED_COLOR_HEX)
+        self.assertIsNone(viewer._history_points_xyz(smoothed=False))
+
+    def test_selected_diversity_speed_profile_follows_selected_geometry(self):
+        class Viewer(SpeedControlsMixin):
+            def _manual_preview_is_active_for_speed(self):
+                return False
+
+            def _is_traj_pending_deleted(self, _traj_idx):
+                return False
+
+            def _is_gt_trajectory(self, _traj, _fallback_index=-1):
+                return False
+
+        def traj_with_stale_velocity(step_m: float) -> dict:
+            x = np.arange(1, 5, dtype=np.float64) * float(step_m)
+            return {
+                "x": x,
+                "y": np.zeros_like(x),
+                "z": np.zeros_like(x),
+                "vx": np.full_like(x, 99.0),
+                "vy": np.zeros_like(x),
+                "vz": np.zeros_like(x),
+            }
+
+        viewer = Viewer()
+        viewer.trajectories = [
+            traj_with_stale_velocity(0.1),
+            traj_with_stale_velocity(0.3),
+        ]
+        viewer.trajectory_states = {0: True, 1: True}
+        viewer.trajectory_smoothness = {}
+        viewer.cluster_preview_traj = None
+        viewer.current_traj_idx = 0
+        viewer.speed_edit_active = False
+        viewer.speed_edit_speed = None
+
+        _label0, speed0, _stops0, _color0 = viewer._selected_speed_profile_source()
+        viewer.current_traj_idx = 1
+        _label1, speed1, _stops1, _color1 = viewer._selected_speed_profile_source()
+
+        np.testing.assert_allclose(speed0, np.full(4, 1.0))
+        np.testing.assert_allclose(speed1, np.full(4, 3.0))
+        self.assertFalse(np.allclose(speed0, speed1))
+
+    def test_cluster_preview_speed_profile_follows_current_preview_geometry(self):
+        class Viewer(SpeedControlsMixin):
+            def _manual_preview_is_active_for_speed(self):
+                return False
+
+            def _is_traj_pending_deleted(self, _traj_idx):
+                return False
+
+            def _is_gt_trajectory(self, _traj, _fallback_index=-1):
+                return False
+
+        viewer = Viewer()
+        viewer.trajectories = [{
+            "x": np.arange(1, 5, dtype=np.float64),
+            "y": np.zeros(4),
+            "z": np.zeros(4),
+        }]
+        viewer.trajectory_states = {0: True}
+        viewer.trajectory_smoothness = {}
+        viewer.current_traj_idx = 0
+        viewer.speed_edit_active = False
+        viewer.speed_edit_speed = None
+
+        viewer.cluster_preview_traj = np.column_stack([
+            np.arange(1, 5, dtype=np.float64) * 0.2,
+            np.zeros(4),
+            np.zeros(4),
+        ])
+        label0, speed0, _stops0, _color0 = viewer._selected_speed_profile_source()
+
+        viewer.cluster_preview_traj = np.column_stack([
+            np.arange(1, 5, dtype=np.float64) * 0.4,
+            np.zeros(4),
+            np.zeros(4),
+        ])
+        label1, speed1, _stops1, _color1 = viewer._selected_speed_profile_source()
+
+        self.assertEqual(label0, "Cluster preview")
+        self.assertEqual(label1, "Cluster preview")
+        np.testing.assert_allclose(speed0, np.full(4, 2.0))
+        np.testing.assert_allclose(speed1, np.full(4, 4.0))
 
     def test_speed_controls_history_points_are_display_smoothed_without_mutating_source(self):
         class Viewer(SpeedControlsMixin):
@@ -1002,6 +1437,436 @@ class GuiHelperTests(unittest.TestCase):
 
         self.assertEqual(keyframes, [8, 16, 24, 32, 40, 48, 56, 63])
 
+    def test_saved_trajectory_edit_mixin_uses_four_position_handles(self):
+        class Viewer(SavedTrajectoryEditingMixin):
+            def _selected_saved_traj_xyz(self):
+                return np.column_stack(
+                    [
+                        np.linspace(0.05, 12.0, 64),
+                        np.zeros(64),
+                        np.zeros(64),
+                    ]
+                )
+
+        viewer = Viewer()
+
+        self.assertEqual(viewer._saved_trajectory_edit_keyframes(), [16, 32, 48, 63])
+
+    def test_speed_drag_during_saved_trajectory_edit_preserves_endpoint(self):
+        class Viewer(SpeedControlsMixin, SavedTrajectoryEditingMixin):
+            def __init__(self):
+                self.gt_only = False
+                self.current_traj_idx = 0
+                self.traj_geom_edit_active = True
+                self.traj_geom_edit_dirty = False
+                self.traj_geom_edit_traj_idx = 0
+                self.traj_geom_edit_original_traj = None
+                self.traj_geom_edit_original_xyz = None
+                self.speed_edit_active = False
+                self.speed_edit_dirty = False
+                self.speed_edit_traj_idx = None
+                self.speed_edit_original_traj = None
+                self.speed_edit_original_xyz = None
+                self.speed_edit_speed = None
+                self.speed_edit_last_frame = None
+                self.speed_canvas_width = 240
+                self.speed_canvas_height = 140
+                self.speed_plot_rect = None
+                self.speed_hover_source = None
+                self.speed_hover_frame_idx = None
+                self.conv_data = None
+                self.trajectory_states = {0: True}
+                self.trajectory_smoothness = {}
+                x = np.linspace(0.25, 16.0, 64)
+                y = 1.2 * np.sin(np.linspace(0.0, np.pi, 64))
+                z = np.zeros(64)
+                self.trajectories = [{"x": x.copy(), "y": y.copy(), "z": z.copy()}]
+                self.draw_calls = 0
+
+            def _is_traj_pending_deleted(self, _traj_idx):
+                return False
+
+            def _is_gt_trajectory(self, _traj, _fallback_index=-1):
+                return False
+
+            def _refresh_trajectory_smoothness(self):
+                self.trajectory_smoothness = {0: {"ok": True}}
+
+            def _hide_pred_speed_actions(self):
+                pass
+
+            def _update_display(self):
+                pass
+
+            def _draw_trajectories(self):
+                self.draw_calls += 1
+
+            def _draw_speed_profile(self):
+                self.draw_calls += 1
+
+            def _draw_camera_images(self):
+                self.draw_calls += 1
+
+        class Event:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+        viewer = Viewer()
+        original_endpoint = viewer._selected_saved_traj_xyz()[-1].copy()
+        rect = viewer._speed_plot_geometry()
+
+        viewer._on_speed_canvas_left_down(
+            Event(
+                x=rect["left"] + rect["width"] * 0.45,
+                y=rect["top"] + rect["height"] * 0.25,
+            )
+        )
+
+        edited_xyz = viewer._selected_saved_traj_xyz()
+        self.assertTrue(viewer.speed_edit_active)
+        self.assertTrue(viewer.speed_edit_dirty)
+        self.assertTrue(viewer.traj_geom_edit_dirty)
+        np.testing.assert_allclose(edited_xyz[-1], original_endpoint, atol=1e-6)
+        self.assertGreater(viewer.draw_calls, 0)
+
+    def test_speed_edit_undo_redo_restores_speed_and_geometry_snapshots(self):
+        class Viewer(SpeedControlsMixin):
+            def __init__(self):
+                self.speed_edit_active = True
+                self.speed_edit_dirty = False
+                self.speed_edit_traj_idx = 0
+                self.speed_edit_undo_stack = []
+                self.speed_edit_redo_stack = []
+                self.traj_geom_edit_active = True
+                self.traj_geom_edit_traj_idx = 0
+                self.traj_geom_edit_dirty = False
+                self.trajectory_smoothness = {}
+                self.update_count = 0
+                self.refresh_count = 0
+                base = np.column_stack([
+                    np.linspace(0.25, 16.0, 64),
+                    np.zeros(64),
+                    np.zeros(64),
+                ])
+                self.trajectories = [trajectory_components_from_xyz(base)]
+                self.speed_edit_original_xyz = base.copy()
+                self.speed_edit_speed = self._trajectory_speed_profile(self.trajectories[0]).copy()
+
+            def _refresh_trajectory_smoothness(self):
+                self.refresh_count += 1
+
+            def _update_display(self):
+                self.update_count += 1
+
+        viewer = Viewer()
+        before = viewer._speed_edit_snapshot()
+        after_xyz = np.column_stack([
+            np.linspace(0.25, 16.0, 64),
+            np.linspace(0.0, 1.5, 64),
+            np.zeros(64),
+        ])
+        after = {
+            "speed": np.linspace(2.0, 5.0, 64),
+            "xyz": after_xyz,
+        }
+        viewer._apply_speed_edit_snapshot(after)
+        viewer._record_speed_edit_snapshot(before, after)
+
+        self.assertTrue(viewer._undo_speed_edit())
+        undone = viewer._speed_edit_snapshot()
+        np.testing.assert_allclose(undone["speed"], before["speed"])
+        np.testing.assert_allclose(undone["xyz"], before["xyz"])
+
+        self.assertTrue(viewer._redo_speed_edit())
+        redone = viewer._speed_edit_snapshot()
+        np.testing.assert_allclose(redone["speed"], after["speed"])
+        np.testing.assert_allclose(redone["xyz"], after["xyz"])
+        self.assertEqual(len(viewer.speed_edit_undo_stack), 1)
+        self.assertEqual(len(viewer.speed_edit_redo_stack), 0)
+        self.assertGreaterEqual(viewer.update_count, 2)
+        self.assertGreaterEqual(viewer.refresh_count, 2)
+
+    def test_speed_drag_records_single_undo_step_on_release(self):
+        class Viewer(SpeedControlsMixin, SavedTrajectoryEditingMixin):
+            def __init__(self):
+                self.gt_only = False
+                self.current_traj_idx = 0
+                self.traj_geom_edit_active = True
+                self.traj_geom_edit_dirty = False
+                self.traj_geom_edit_traj_idx = 0
+                self.speed_edit_active = False
+                self.speed_edit_dirty = False
+                self.speed_edit_traj_idx = None
+                self.speed_edit_original_traj = None
+                self.speed_edit_original_xyz = None
+                self.speed_edit_speed = None
+                self.speed_edit_last_frame = None
+                self.speed_edit_undo_stack = []
+                self.speed_edit_redo_stack = []
+                self.speed_edit_drag_snapshot = None
+                self.speed_canvas_width = 240
+                self.speed_canvas_height = 140
+                self.speed_plot_rect = None
+                self.speed_hover_source = None
+                self.speed_hover_frame_idx = None
+                self.conv_data = None
+                self.trajectory_states = {0: True}
+                self.trajectory_smoothness = {}
+                x = np.linspace(0.25, 16.0, 64)
+                y = 1.2 * np.sin(np.linspace(0.0, np.pi, 64))
+                z = np.zeros(64)
+                self.trajectories = [{"x": x.copy(), "y": y.copy(), "z": z.copy()}]
+                self.draw_calls = 0
+
+            def _is_traj_pending_deleted(self, _traj_idx):
+                return False
+
+            def _is_gt_trajectory(self, _traj, _fallback_index=-1):
+                return False
+
+            def _refresh_trajectory_smoothness(self):
+                self.trajectory_smoothness = {0: {"ok": True}}
+
+            def _hide_pred_speed_actions(self):
+                pass
+
+            def _update_display(self):
+                pass
+
+            def _draw_trajectories(self):
+                self.draw_calls += 1
+
+            def _draw_speed_profile(self):
+                self.draw_calls += 1
+
+            def _draw_camera_images(self):
+                self.draw_calls += 1
+
+        class Event:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+        viewer = Viewer()
+        rect = viewer._speed_plot_geometry()
+        viewer._start_speed_edit_for_canvas_interaction()
+        before = viewer._speed_edit_snapshot()
+        viewer._reset_speed_edit_state()
+
+        viewer._on_speed_canvas_left_down(
+            Event(
+                x=rect["left"] + rect["width"] * 0.45,
+                y=rect["top"] + rect["height"] * 0.25,
+            )
+        )
+        viewer._on_speed_canvas_left_drag(
+            Event(
+                x=rect["left"] + rect["width"] * 0.55,
+                y=rect["top"] + rect["height"] * 0.20,
+            )
+        )
+        viewer._on_speed_canvas_left_release(Event(x=0, y=0))
+
+        self.assertEqual(len(viewer.speed_edit_undo_stack), 1)
+        self.assertEqual(len(viewer.speed_edit_redo_stack), 0)
+        self.assertTrue(viewer._undo_speed_edit())
+        undone = viewer._speed_edit_snapshot()
+        np.testing.assert_allclose(undone["speed"], before["speed"])
+        np.testing.assert_allclose(undone["xyz"], before["xyz"])
+
+    def test_ctrl_z_y_prioritizes_active_speed_edit(self):
+        class Viewer(SavedTrajectoryEditingMixin):
+            def __init__(self):
+                self.speed_edit_active = True
+                self.speed_undo_calls = 0
+                self.speed_redo_calls = 0
+                self.geometry_undo_calls = 0
+                self.geometry_redo_calls = 0
+
+            def _undo_speed_edit(self):
+                self.speed_undo_calls += 1
+                return True
+
+            def _redo_speed_edit(self):
+                self.speed_redo_calls += 1
+                return True
+
+            def _undo_saved_trajectory_edit(self):
+                self.geometry_undo_calls += 1
+                return True
+
+            def _redo_saved_trajectory_edit(self):
+                self.geometry_redo_calls += 1
+                return True
+
+        viewer = Viewer()
+
+        self.assertEqual(viewer._on_undo_saved_trajectory_edit_key(), "break")
+        self.assertEqual(viewer._on_redo_saved_trajectory_edit_key(), "break")
+        self.assertEqual(viewer.speed_undo_calls, 1)
+        self.assertEqual(viewer.speed_redo_calls, 1)
+        self.assertEqual(viewer.geometry_undo_calls, 0)
+        self.assertEqual(viewer.geometry_redo_calls, 0)
+
+    def test_saved_trajectory_edit_undo_redo_restores_drag_snapshots(self):
+        class Viewer(SavedTrajectoryEditingMixin):
+            def __init__(self):
+                self.current_traj_idx = 0
+                self.traj_geom_edit_active = True
+                self.traj_geom_edit_dirty = False
+                self.traj_geom_edit_traj_idx = 0
+                self.traj_geom_edit_undo_stack = []
+                self.traj_geom_edit_redo_stack = []
+                self.update_count = 0
+                self.refresh_count = 0
+                base = np.column_stack([
+                    np.linspace(0.25, 16.0, 64),
+                    np.zeros(64),
+                    np.zeros(64),
+                ])
+                self.trajectories = [trajectory_components_from_xyz(base)]
+
+            def _update_display(self):
+                self.update_count += 1
+
+            def _refresh_trajectory_smoothness(self):
+                self.refresh_count += 1
+
+        viewer = Viewer()
+        before = viewer._selected_saved_traj_xyz().copy()
+        after = before.copy()
+        after[16, 1] = 2.0
+        viewer._apply_saved_trajectory_edit_xyz_snapshot(after)
+        viewer._record_saved_trajectory_edit_snapshot(before, after)
+
+        self.assertTrue(viewer._undo_saved_trajectory_edit())
+        np.testing.assert_allclose(viewer._selected_saved_traj_xyz(), before)
+
+        self.assertTrue(viewer._redo_saved_trajectory_edit())
+        np.testing.assert_allclose(viewer._selected_saved_traj_xyz(), after)
+        self.assertEqual(len(viewer.traj_geom_edit_undo_stack), 1)
+        self.assertEqual(len(viewer.traj_geom_edit_redo_stack), 0)
+        self.assertGreaterEqual(viewer.update_count, 2)
+        self.assertGreaterEqual(viewer.refresh_count, 2)
+
+    def test_saved_trajectory_drag_records_single_undo_step_on_release(self):
+        class Viewer(SavedTrajectoryEditingMixin):
+            def __init__(self):
+                self.current_traj_idx = 0
+                self.traj_geom_edit_active = True
+                self.traj_geom_edit_dirty = False
+                self.traj_geom_edit_traj_idx = 0
+                self.traj_geom_edit_undo_stack = []
+                self.traj_geom_edit_redo_stack = []
+                base = np.column_stack([
+                    np.linspace(0.25, 16.0, 64),
+                    np.zeros(64),
+                    np.zeros(64),
+                ])
+                self.trajectories = [trajectory_components_from_xyz(base)]
+                self.drag_state = {
+                    "type": "saved_traj_keyframe",
+                    "traj_idx": 0,
+                    "frame_idx": 16,
+                    "base_xyz": base.copy(),
+                }
+
+            def _canvas_to_world(self, canvas_x, canvas_y):
+                return float(canvas_x), float(canvas_y)
+
+            def _update_display(self):
+                pass
+
+            def _refresh_trajectory_smoothness(self):
+                pass
+
+        viewer = Viewer()
+        before = viewer.drag_state["base_xyz"].copy()
+
+        self.assertTrue(viewer._drag_saved_trajectory_keyframe(4.0, 2.0))
+        self.assertTrue(viewer._finish_saved_trajectory_keyframe_drag())
+        self.assertEqual(len(viewer.traj_geom_edit_undo_stack), 1)
+        np.testing.assert_allclose(viewer.traj_geom_edit_undo_stack[0], before)
+
+        self.assertTrue(viewer._undo_saved_trajectory_edit())
+        np.testing.assert_allclose(viewer._selected_saved_traj_xyz(), before)
+
+    def test_speed_edit_uses_broader_local_influence_window(self):
+        class Viewer(SpeedControlsMixin):
+            pass
+
+        viewer = Viewer()
+
+        self.assertEqual(SPEED_EDIT_LOCAL_RADIUS_FRAMES, 48)
+        self.assertEqual(viewer._speed_edit_local_radius(64), 48)
+
+    def test_speed_edit_postprocess_smooths_dragged_speed_profile(self):
+        class Viewer(SpeedControlsMixin):
+            pass
+
+        viewer = Viewer()
+        speed = np.full(64, 4.0, dtype=np.float64)
+        speed[32] = 12.0
+
+        smoothed = viewer._postprocess_edited_speed_profile(speed)
+
+        self.assertEqual(len(smoothed), len(speed))
+        self.assertLess(float(smoothed[32]), 12.0)
+        self.assertGreater(float(smoothed[31]), 4.0)
+        self.assertGreater(float(smoothed[33]), 4.0)
+        self.assertTrue(np.all(np.isfinite(smoothed)))
+
+    def test_speed_edit_postprocess_anchors_future_speed_to_t0_history_speed(self):
+        class Viewer(SpeedControlsMixin):
+            def _speed_edit_initial_speed_mps(self):
+                return 8.0
+
+        viewer = Viewer()
+        speed = np.full(64, 2.0, dtype=np.float64)
+        speed[0] = 0.0
+
+        smoothed = viewer._postprocess_edited_speed_profile(speed)
+        first_accel = (smoothed[0] - 8.0) / TRAJ_DT_SECONDS
+
+        self.assertGreaterEqual(first_accel, TRAJ_ACCEL_MIN_MPS2 - 1e-9)
+        self.assertLessEqual(first_accel, TRAJ_ACCEL_MAX_MPS2 + 1e-9)
+
+    def test_speed_edit_resampled_trajectory_respects_t0_history_speed(self):
+        class Viewer(SpeedControlsMixin):
+            def __init__(self):
+                self.speed_edit_original_xyz = np.column_stack([
+                    np.linspace(0.8, 22.0, 64),
+                    np.zeros(64),
+                    np.zeros(64),
+                ])
+                self.speed_edit_speed = np.full(64, 2.0, dtype=np.float64)
+                self.speed_edit_traj_idx = 0
+                components = trajectory_components_from_xyz(self.speed_edit_original_xyz)
+                self.trajectories = [{"sample_idx": 0, "source": "vla", **components}]
+                self.trajectory_smoothness = {}
+
+            def _speed_edit_initial_speed_mps(self):
+                return 8.0
+
+            def _refresh_trajectory_smoothness(self):
+                pass
+
+        viewer = Viewer()
+
+        self.assertTrue(viewer._apply_speed_edit_to_trajectory())
+        edited_xyz = np.column_stack([
+            viewer.trajectories[0]["x"],
+            viewer.trajectories[0]["y"],
+            viewer.trajectories[0]["z"],
+        ])
+        future_speed0 = float(np.linalg.norm(edited_xyz[0, :2]) / TRAJ_DT_SECONDS)
+        first_accel = (future_speed0 - 8.0) / TRAJ_DT_SECONDS
+
+        self.assertGreaterEqual(first_accel, TRAJ_ACCEL_MIN_MPS2 - 0.2)
+        self.assertLessEqual(first_accel, TRAJ_ACCEL_MAX_MPS2 + 0.2)
+        np.testing.assert_allclose(edited_xyz[-1], viewer.speed_edit_original_xyz[-1], atol=1e-6)
+
     def test_saved_trajectory_geometry_edit_deforms_locally_and_preserves_start(self):
         xyz = np.column_stack(
             [
@@ -1130,7 +1995,7 @@ class GuiHelperTests(unittest.TestCase):
         self.assertFalse(viewer.traj_geom_edit_dirty)
         self.assertIsNone(viewer.traj_geom_edit_traj_idx)
 
-    def test_speed_edit_does_not_start_while_geometry_edit_active(self):
+    def test_speed_edit_does_not_start_when_geometry_edit_targets_another_trajectory(self):
         class Viewer(SpeedControlsMixin):
             def _is_traj_pending_deleted(self, traj_idx):
                 return False
@@ -1154,6 +2019,7 @@ class GuiHelperTests(unittest.TestCase):
         viewer.current_traj_idx = 0
         viewer.trajectories = [{"sample_idx": 0, "source": "vla", **components}]
         viewer.traj_geom_edit_active = True
+        viewer.traj_geom_edit_traj_idx = 1
         viewer.speed_edit_active = False
         viewer.speed_edit_original_traj = None
         viewer.speed_edit_traj_idx = None

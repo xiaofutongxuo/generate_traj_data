@@ -361,6 +361,8 @@
   - GUI 状态栏新增 clip 覆盖率：`Video t0: N | Generated t0: M | Missing: K | Current: generated/no generated`。
   - 如果当前视频帧没有生成轨迹，GUI 仍显示图像、真实 history、GT，右侧轨迹列表为空。
   - `load_data()` 新增 history/future valid mask；录制开头真实历史帧不足时，history 速度和 BEV 历史轨迹不绘制外推出来的历史段。
+  - 后续修正：跨 clip egomotion 拼接不能只看 timestamp 连续；如果相邻 clip 边界的空间跳变对应速度超过默认 `80m/s`，会切断连续段，避免 clip 开头历史速度出现百/千 m/s 的异常值。
+  - 后续修正：dataset 级 egomotion 连续段改为缓存并向量化按 clip/t0 定位，避免 GUI 启动时重复扫描全量 egomotion；clip 开头的速度面板改为优先使用 `vx/vy/vz` 历史速度，位置 history 不跨坐标跳变，但速度 history 不再消失。
 - 当前行为：
   - 默认推理和默认 GUI 都按主视频帧逐帧工作。
   - `--candidate_stride` 只对旧 `speed_candidates` 模式生效。

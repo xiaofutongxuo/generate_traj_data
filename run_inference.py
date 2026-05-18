@@ -881,6 +881,7 @@ def main():
                     t0_values,
                     num_future_steps=config.data.num_future_steps,
                     time_step=config.data.time_step,
+                    clip_stem=clip_stem,
                 )
                 if not t0_values:
                     print(f"Warning: no video-frame t0 timestamps for {dataset_name}/{clip_stem}")

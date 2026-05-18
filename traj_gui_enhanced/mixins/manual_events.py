@@ -285,6 +285,8 @@ class ManualEventsMixin:
 
     def _on_left_release(self, _event):
         if self.drag_state and self.drag_state.get("type") in {"cluster_endpoint", "saved_traj_keyframe"}:
+            if self.drag_state.get("type") == "saved_traj_keyframe":
+                self._finish_saved_trajectory_keyframe_drag()
             self.drag_state = None
 
     def _on_right_release(self, _event):

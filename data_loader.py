@@ -35,6 +35,7 @@ GT_ACCEL_MIN_MPS2 = -6.0
 GT_ACCEL_MAX_MPS2 = 2.0
 GT_MAX_STEP_SPEED_MPS = 15.0
 DEFAULT_CONTINUITY_MAX_GAP_SECONDS = 0.3
+DEFAULT_CONTINUITY_MAX_STEP_SPEED_MPS = 80.0
 
 
 def _resize_frames(frames, target_hw: tuple[int, int]):
@@ -170,6 +171,142 @@ def _coverage_mask_for_timestamps(
     )
 
 
+def _egomotion_sorted_with_continuity_segments(
+    df: pd.DataFrame,
+    max_gap_seconds: float = DEFAULT_CONTINUITY_MAX_GAP_SECONDS,
+    max_step_speed_mps: float = DEFAULT_CONTINUITY_MAX_STEP_SPEED_MPS,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Return egomotion rows sorted by time plus segment ids split at discontinuities."""
+    sorted_df = df.sort_values("timestamp").reset_index(drop=True)
+    n_rows = len(sorted_df)
+    segment_ids = np.zeros(n_rows, dtype=np.int64)
+    if n_rows <= 1:
+        return sorted_df, segment_ids
+
+    ts = sorted_df["timestamp"].to_numpy(dtype=np.int64)
+    xyz = sorted_df[["x", "y", "z"]].to_numpy(dtype=np.float64)
+    dt_us = np.diff(ts)
+    dt_s = dt_us.astype(np.float64) * 1e-6
+    step_dist = np.linalg.norm(np.diff(xyz, axis=0), axis=1)
+    max_gap_us = int(round(float(max_gap_seconds) * 1_000_000))
+    max_step_dist = np.maximum(dt_s, 1e-9) * float(max_step_speed_mps)
+    continuous_edge = (
+        (dt_us > 0)
+        & (dt_us <= max_gap_us)
+        & np.isfinite(step_dist)
+        & (step_dist <= max_step_dist)
+    )
+    segment_ids[1:] = np.cumsum(~continuous_edge)
+    return sorted_df, segment_ids
+
+
+def _nearest_clip_segment_id(
+    sorted_df: pd.DataFrame,
+    segment_ids: np.ndarray,
+    clip_stem: str,
+    t0_us: int,
+) -> Optional[int]:
+    segment_ids_for_t0 = _nearest_clip_segment_ids(
+        sorted_df,
+        segment_ids,
+        clip_stem,
+        np.asarray([int(t0_us)], dtype=np.int64),
+    )
+    if len(segment_ids_for_t0) == 0 or segment_ids_for_t0[0] is None:
+        return None
+    return int(segment_ids_for_t0[0])
+
+
+def _nearest_clip_segment_ids(
+    sorted_df: pd.DataFrame,
+    segment_ids: np.ndarray,
+    clip_stem: str,
+    t0_values: np.ndarray,
+) -> np.ndarray:
+    t0_arr = np.asarray(t0_values, dtype=np.int64).reshape(-1)
+    result = np.full(len(t0_arr), None, dtype=object)
+    if "_clip_stem" not in sorted_df.columns or not clip_stem:
+        return result
+
+    clip_mask = sorted_df["_clip_stem"].to_numpy(dtype=object) == str(clip_stem)
+    clip_positions = np.flatnonzero(clip_mask)
+    if len(clip_positions) == 0:
+        return result
+
+    ts = sorted_df["timestamp"].to_numpy(dtype=np.int64)
+    clip_ts = ts[clip_positions]
+    insert_at = np.searchsorted(clip_ts, t0_arr, side="left")
+    left_idx = np.clip(insert_at - 1, 0, len(clip_positions) - 1)
+    right_idx = np.clip(insert_at, 0, len(clip_positions) - 1)
+    use_right = np.abs(clip_ts[right_idx] - t0_arr) < np.abs(clip_ts[left_idx] - t0_arr)
+    nearest_idx = np.where(use_right, right_idx, left_idx)
+    result[:] = segment_ids[clip_positions[nearest_idx]]
+    return result
+
+
+@lru_cache(maxsize=16)
+def _load_dataset_egomotion_segments_cached(
+    data_root: str,
+    dataset_name: str,
+    max_gap_seconds: float,
+    max_step_speed_mps: float,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    df = _load_dataset_egomotion_dataframe_cached(str(Path(data_root)), str(dataset_name))
+    return _egomotion_sorted_with_continuity_segments(
+        df,
+        max_gap_seconds=max_gap_seconds,
+        max_step_speed_mps=max_step_speed_mps,
+    )
+
+
+def _load_dataset_egomotion_segments(
+    data_root: str | Path,
+    dataset_name: str,
+    max_gap_seconds: float = DEFAULT_CONTINUITY_MAX_GAP_SECONDS,
+    max_step_speed_mps: float = DEFAULT_CONTINUITY_MAX_STEP_SPEED_MPS,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    sorted_df, segment_ids = _load_dataset_egomotion_segments_cached(
+        str(Path(data_root)),
+        str(dataset_name),
+        float(max_gap_seconds),
+        float(max_step_speed_mps),
+    )
+    return sorted_df.copy(), segment_ids.copy()
+
+
+def _continuous_egomotion_dataframe_from_segments(
+    sorted_df: pd.DataFrame,
+    segment_ids: np.ndarray,
+    clip_stem: str,
+    t0_us: int,
+) -> pd.DataFrame:
+    segment_id = _nearest_clip_segment_id(sorted_df, segment_ids, clip_stem, t0_us)
+    if segment_id is None:
+        return sorted_df.reset_index(drop=True)
+    return sorted_df.loc[segment_ids == segment_id].reset_index(drop=True)
+
+
+def _continuous_egomotion_dataframe_for_clip(
+    df: pd.DataFrame,
+    clip_stem: str,
+    t0_us: int,
+    max_gap_seconds: float = DEFAULT_CONTINUITY_MAX_GAP_SECONDS,
+    max_step_speed_mps: float = DEFAULT_CONTINUITY_MAX_STEP_SPEED_MPS,
+) -> pd.DataFrame:
+    """Select the continuous egomotion segment containing the requested clip/t0."""
+    sorted_df, segment_ids = _egomotion_sorted_with_continuity_segments(
+        df,
+        max_gap_seconds=max_gap_seconds,
+        max_step_speed_mps=max_step_speed_mps,
+    )
+    return _continuous_egomotion_dataframe_from_segments(
+        sorted_df,
+        segment_ids,
+        clip_stem,
+        t0_us,
+    )
+
+
 def filter_t0s_with_full_future(
     data_root: str | Path,
     dataset_name: str,
@@ -177,27 +314,59 @@ def filter_t0s_with_full_future(
     num_future_steps: int = 64,
     time_step: float = 0.1,
     max_gap_seconds: float = DEFAULT_CONTINUITY_MAX_GAP_SECONDS,
+    clip_stem: str | None = None,
+    max_step_speed_mps: float = DEFAULT_CONTINUITY_MAX_STEP_SPEED_MPS,
 ) -> list[int]:
     """Keep t0 values whose full future horizon is covered by continuous egomotion."""
     if not t0_values:
         return []
-    try:
-        df_ego = _load_dataset_egomotion_dataframe(data_root, dataset_name)
-    except Exception:
-        return []
-
-    source_ts = _sorted_unique_timestamps(df_ego["timestamp"].to_numpy(dtype=np.int64))
     dt_us = int(round(float(time_step) * 1_000_000))
     max_gap_us = int(round(float(max_gap_seconds) * 1_000_000))
     t0_arr = np.asarray([int(t0) for t0 in t0_values], dtype=np.int64)
     offsets = np.arange(0, int(num_future_steps) + 1, dtype=np.int64) * dt_us
-    target_ts = t0_arr[:, None] + offsets[None, :]
-    coverage = _coverage_mask_for_sorted_timestamps(
-        source_ts,
-        target_ts.reshape(-1),
-        max_gap_us,
-    ).reshape(target_ts.shape)
-    keep_mask = coverage.all(axis=1)
+    if clip_stem:
+        try:
+            sorted_df, segment_ids = _load_dataset_egomotion_segments(
+                data_root,
+                dataset_name,
+                max_gap_seconds=max_gap_seconds,
+                max_step_speed_mps=max_step_speed_mps,
+            )
+        except Exception:
+            return []
+        t0_segment_ids = _nearest_clip_segment_ids(
+            sorted_df,
+            segment_ids,
+            str(clip_stem),
+            t0_arr,
+        )
+        keep_mask = np.zeros(len(t0_arr), dtype=bool)
+        for segment_id in sorted(set(t0_segment_ids) - {None}):
+            rows = segment_ids == int(segment_id)
+            source_ts = _sorted_unique_timestamps(
+                sorted_df.loc[rows, "timestamp"].to_numpy(dtype=np.int64)
+            )
+            t0_rows = t0_segment_ids == segment_id
+            target_ts = t0_arr[t0_rows, None] + offsets[None, :]
+            coverage = _coverage_mask_for_sorted_timestamps(
+                source_ts,
+                target_ts.reshape(-1),
+                max_gap_us,
+            ).reshape(target_ts.shape)
+            keep_mask[t0_rows] = coverage.all(axis=1)
+    else:
+        try:
+            df_ego = _load_dataset_egomotion_dataframe(data_root, dataset_name)
+        except Exception:
+            return []
+        source_ts = _sorted_unique_timestamps(df_ego["timestamp"].to_numpy(dtype=np.int64))
+        target_ts = t0_arr[:, None] + offsets[None, :]
+        coverage = _coverage_mask_for_sorted_timestamps(
+            source_ts,
+            target_ts.reshape(-1),
+            max_gap_us,
+        ).reshape(target_ts.shape)
+        keep_mask = coverage.all(axis=1)
     return [int(t0) for t0, keep in zip(t0_arr, keep_mask) if bool(keep)]
 
 
@@ -579,11 +748,12 @@ def load_data(
     if not ts_file.exists():
         raise FileNotFoundError(f"Timestamp file not found: {ts_file}")
 
-    df_ego_current = pd.read_parquet(ego_file)
     try:
-        df_ego = _load_dataset_egomotion_dataframe(data_root, dataset_name)
+        df_ego_all, ego_segment_ids = _load_dataset_egomotion_segments(data_root, dataset_name)
     except Exception:
-        df_ego = df_ego_current
+        df_ego_current = pd.read_parquet(ego_file)
+        df_ego_all = df_ego_current
+        df_ego_all, ego_segment_ids = _egomotion_sorted_with_continuity_segments(df_ego_all)
     df_master = pd.read_parquet(ts_file)
 
     master_ts = df_master["timestamp"].values
@@ -599,6 +769,12 @@ def load_data(
     else:
         t0_abs = t0_us
     t0_abs = int(np.clip(t0_abs, clip_start_us, clip_end_us))
+    df_ego = _continuous_egomotion_dataframe_from_segments(
+        df_ego_all,
+        ego_segment_ids,
+        clip_stem,
+        t0_abs,
+    )
 
     history_ts = np.array(
         [t0_abs - (num_history_steps - 1 - i) * dt_us for i in range(num_history_steps)],
@@ -615,6 +791,17 @@ def load_data(
     )
     history_valid_mask = _coverage_mask_for_timestamps(source_ts, history_ts)
     future_valid_mask = _coverage_mask_for_timestamps(source_ts, future_ts)
+    speed_source_ts = df_ego_all["timestamp"].to_numpy(dtype=np.int64)
+    history_speed_valid_mask = _coverage_mask_for_timestamps(speed_source_ts, history_ts)
+    try:
+        history_velocity, _history_velocity_quat = _interp_velocity_and_quat_at_timestamps(
+            df_ego_all,
+            history_ts,
+        )
+        ego_history_speed_mps = np.linalg.norm(history_velocity, axis=1).astype(np.float32)
+    except Exception:
+        ego_history_speed_mps = np.full(len(history_ts), np.nan, dtype=np.float32)
+        history_speed_valid_mask = np.zeros(len(history_ts), dtype=bool)
 
     hist_xyz, hist_quat = _interp_ego_at_timestamps(df_ego, history_ts)
     fut_xyz, fut_quat = _interp_ego_at_timestamps(df_ego, future_ts)
@@ -631,7 +818,13 @@ def load_data(
     ego_hist_xyz_local = t0_rot_inv.apply(hist_xyz - t0_xyz).astype(np.float32)
     ego_fut_xyz_local = t0_rot_inv.apply(fut_xyz - t0_xyz).astype(np.float32)
     gt_initial_speed_mps = None
-    if len(ego_hist_xyz_local) >= 2 and time_step > 0:
+    if (
+        len(ego_history_speed_mps)
+        and bool(history_speed_valid_mask[-1])
+        and np.isfinite(ego_history_speed_mps[-1])
+    ):
+        gt_initial_speed_mps = float(ego_history_speed_mps[-1])
+    elif len(ego_hist_xyz_local) >= 2 and time_step > 0:
         gt_initial_speed_mps = float(
             np.linalg.norm(ego_hist_xyz_local[-1, :2] - ego_hist_xyz_local[-2, :2])
             / float(time_step)
@@ -729,6 +922,8 @@ def load_data(
         "ego_history_xyz": _unsqueeze_twice(_array_from_numpy(ego_hist_xyz_local)),
         "ego_history_rot": _unsqueeze_twice(_array_from_numpy(ego_hist_rot_local)),
         "ego_history_valid_mask": _unsqueeze_twice(_array_from_numpy(history_valid_mask.astype(bool))),
+        "ego_history_speed_mps": _unsqueeze_twice(_array_from_numpy(ego_history_speed_mps)),
+        "ego_history_speed_valid_mask": _unsqueeze_twice(_array_from_numpy(history_speed_valid_mask.astype(bool))),
         "ego_future_xyz": _unsqueeze_twice(_array_from_numpy(ego_fut_xyz_local)),
         "ego_future_xyz_raw": _unsqueeze_twice(_array_from_numpy(ego_fut_xyz_local.copy())),
         "ego_future_xyz_repaired": _unsqueeze_twice(_array_from_numpy(ego_fut_xyz_repaired_local)),

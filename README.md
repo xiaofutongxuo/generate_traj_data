@@ -56,9 +56,7 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 ```
 
 默认 `--t0_source video_frames --frame_stride 1` 会按主视频时间戳逐帧生成，视频约 10Hz，
-即 0.1s 一个 `t0_us`。旧的速度候选抽样模式仍可用：显式传
-`--t0_source speed_candidates --candidate_stride N`。
-video-frame 模式会要求每个 `t0_us` 当前帧和后续 6.4s 的真实 egomotion 连续可用；相邻
+即 0.1s 一个 `t0_us`。video-frame 模式会要求每个 `t0_us` 当前帧和后续 6.4s 的真实 egomotion 连续可用；相邻
 egomotion 缺口不超过 0.3s 时会插值补小范围漏帧，超过 0.3s 视为断点。clip 尾部如果能
 按 timestamp 接上下一个 clip，会继续使用后续 clip 的 egomotion；最后一段或不连续尾部会被过滤。
 
@@ -102,20 +100,6 @@ GUI 默认会把最后浏览位置保存到：
 --no_restore_last
 ```
 
-只查看 GT 样本，不加载生成轨迹：
-
-```bash
-/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python trajectory_gui_enhanced.py \
-  --data_root /home/ubuntu/Public/train_data \
-  --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output \
-  --calibration_dir /home/ubuntu/Public/yzb/triplane_tokenization/cailibration \
-  --gt_only \
-  --index_mode video_frames \
-  --frame_stride 1
-```
-
-旧的稀疏 GT-only 浏览方式仍可用：`--gt_only --index_mode generated --gt_stride_frames 3`。
-
 ## Project Structure
 
 ```text
@@ -127,8 +111,7 @@ generate_traj_data/
 ├── visualization.py               # Trajectory projection visualization
 ├── run_inference.py               # Main trajectory generation script
 ├── frame_index.py                  # Shared video-frame t0 indexing helpers
-├── trajectory_gui.py              # Legacy GUI, kept unchanged
-├── trajectory_gui_enhanced.py     # Backward-compatible enhanced GUI entrypoint
+├── trajectory_gui_enhanced.py     # Enhanced GUI entrypoint
 ├── traj_gui_enhanced/             # Refactored enhanced GUI package
 │   ├── cli.py                     # Enhanced GUI CLI
 │   ├── viewer.py                  # TrajectoryViewerEnhanced composition
@@ -141,90 +124,26 @@ generate_traj_data/
 │   ├── dynamics/                  # Pseudo-GT dynamics diagnostics and optimization
 │   └── mixins/                    # GUI feature areas split by responsibility
 ├── tests/                         # unittest helper coverage
-├── docs/
-│   └── trajectory_gui_optimization_log.md
+├── docs/                          # GUI status, TODO and user docs
 ├── output/                        # Generated parquet files and GUI state
 └── README.md
 ```
 
-`trajectory_gui_enhanced.py` 现在只是兼容入口，继续支持历史命令：
-
-```bash
-python trajectory_gui_enhanced.py ...
-```
-
-新的内部实现入口是：
-
-```python
-from traj_gui_enhanced.viewer import TrajectoryViewerEnhanced
-from traj_gui_enhanced.cli import parse_args, main
-```
-
 ## Setup
 
-### Requirements
-
-- Python 3.10+
-- CUDA-capable GPU for inference
-- Existing Alpamayo runtime:
+使用已有 Alpamayo runtime 运行推理和 GUI：
 
 ```bash
 /home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python --version
 ```
 
-Main runtime dependencies are expected to be available in that environment:
-
-```bash
-pip install torch numpy opencv-python scipy einops transformers
-pip install matplotlib pandas tqdm scikit-learn pyarrow
-```
-
-The local `.venv` is useful for lightweight helper tests, but full model inference should use
+本地 `.venv` 用于轻量 helper 测试；完整模型推理请使用
 `/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python`.
 
 ## Inference Usage
 
-### Basic Inference
-
-```bash
-cd /home/ubuntu/Public/hzq/generate_traj_data
-
-/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python run_inference.py \
-  --model_path /home/ubuntu/Public/lxh/models/Alpamayo-1.5-10B \
-  --train_data_root /home/ubuntu/Public/yzb/triplane_tokenization/data_cache/alpamayo_extracted \
-  --calibration_dir /home/ubuntu/Public/yzb/triplane_tokenization/cailibration \
-  --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output \
-  --vis_output_dir /home/ubuntu/Public/hzq/generate_traj_data/visualizations \
-  --num_traj_samples 6
-```
-
-### With Optional Checkpoints
-
-```bash
-/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python run_inference.py \
-  --model_path /home/ubuntu/Public/lxh/models/Alpamayo-1.5-10B \
-  --traj_checkpoint /path/to/traj_checkpoint.pt \
-  --lora_adapter /path/to/lora/adapter \
-  --train_data_root /home/ubuntu/Public/yzb/triplane_tokenization/data_cache/alpamayo_extracted \
-  --calibration_dir /home/ubuntu/Public/yzb/triplane_tokenization/cailibration \
-  --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output \
-  --vis_output_dir /home/ubuntu/Public/hzq/generate_traj_data/visualizations
-```
-
-### Select Specific Datasets
-
-```bash
-/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python run_inference.py \
-  --datasets data_26_3_24_1_converted,data_26_3_24_2_converted \
-  --model_path /home/ubuntu/Public/lxh/models/Alpamayo-1.5-10B \
-  --train_data_root /home/ubuntu/Public/yzb/triplane_tokenization/data_cache/alpamayo_extracted \
-  --calibration_dir /home/ubuntu/Public/yzb/triplane_tokenization/cailibration \
-  --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output
-```
-
-### Common Options
-
-建议在当前机器上显式传入路径参数。
+Quick Start 命令覆盖了当前常用推理方式。需要缩小范围时加 `--datasets` 或
+`--max_samples`；需要接入微调权重时加 `--traj_checkpoint` 或 `--lora_adapter`。
 
 | Argument | Recommended value / default | Description |
 |----------|-----------------------------|-------------|
@@ -239,13 +158,10 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 | `--num_traj_samples` | 6 | Number of sampled trajectories per t0 |
 | `--num_vis_samples` | 10 | Number of samples to visualize |
 | `--vis_camera` | `FC` | Camera for saved visualization images |
-| `--t0_source` | `video_frames` | `video_frames` uses every master video timestamp; `speed_candidates` uses the legacy sparse speed-filtered candidates |
+| `--t0_source` | `video_frames` | Uses every master video timestamp |
 | `--frame_stride` | 1 | Video-frame stride when `--t0_source video_frames` is used |
-| `--min_speed_mps` | 2.0 | Minimum speed for legacy `speed_candidates` mode |
 | `--max_samples` | 0 | Max t0 samples to process, 0 means all |
 | `--batch_size` | 2 | Valid t0 frames per model batch |
-| `--candidate_stride` | 3 | Process every Nth legacy speed candidate; ignored by `video_frames` mode |
-| `--no_speed_filter` | False | Disable min-speed filtering in legacy `speed_candidates` mode |
 | `--temperature` | 0.6 | Sampling temperature |
 | `--top_p` | 0.98 | Top-p sampling |
 | `--seed` | 42 | Random seed |
@@ -269,6 +185,40 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 │       └── {segment}_fovs_{CAM}.mp4
 └── ...
 ```
+
+### Scene Labels
+
+增强 GUI 会在启动时尝试读取每个原始数据集目录下的场景类别标注：
+
+```text
+/home/ubuntu/Public/train_data/
+└── {dataset_name}/
+    └── scene_labels.json
+```
+
+当前支持的 JSON 结构为：
+
+```json
+{
+  "clips": [
+    {
+      "clip": "2026-03-24-12-06-59",
+      "points": [
+        {
+          "timestamp": 1774325223236390,
+          "scenario_type": "straight"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`clip` 也可以写作 `segment`。GUI 会按 `(clip, timestamp)` 与当前可浏览样本的
+`(clip_stem, t0_us)` 精确匹配，并把匹配到的 `scenario_type` 放入顶部 `Scene`
+下拉框。选择某个场景后，左右切换样本会限制在当前 dataset 内同一场景类别的样本中；
+选择 `None` 则恢复普通顺序导航。该功能只影响 GUI 浏览筛选，不会改变推理生成或
+output parquet 内容。
 
 ### Inference Data Cache
 
@@ -348,11 +298,18 @@ acceleration, jerk, and curvature checks. The same module recomputes `vx/vy/vz`,
 Saved visualization images are written under `visualizations/`. The enhanced GUI projects
 predicted trajectories and GT trajectories onto the configured cameras using the calibration files.
 
+### Coordinate Convention
+
+输出 parquet 中的 `x/y/z` 使用 ego-local 坐标：`x` 为前向、`y` 为左向、`z` 为上向。
+投影到相机时，代码会在内部转换到标定使用的 BEV 轴系：右向/前向/上向。
+
 ## Enhanced GUI Cleaning Workflow
 
 Use `trajectory_gui_enhanced.py` for review and manual augmentation:
 
 - Select dataset, clip, and `t0_us` from the top toolbar, or use the start arguments above.
+- If `scene_labels.json` exists under the current dataset, use the `Scene` dropdown to filter
+  sample navigation by matched `scenario_type`; `None` disables the scene filter.
 - The default GUI index follows every 10Hz video frame. Frames without generated rows remain browsable,
   with an empty trajectory list and `Current: no generated` in the status bar. A video frame is kept
   only when the current frame and next 6.4s of source egomotion are continuously covered; small
@@ -373,18 +330,6 @@ Use `trajectory_gui_enhanced.py` for review and manual augmentation:
   write to output parquet; source-data GT is displayed for reference and is not written to output parquet.
 - Cluster-center preview and Bezier-center saving use files under `k_means/`.
 
-## Camera Models
-
-| Camera | Description |
-|--------|-------------|
-| `FC` | Front Center |
-| `FC_FAR` | Front Center Far |
-| `FL` | Front Left |
-| `FR` | Front Right |
-| `RL` | Rear Left |
-| `RC` | Rear Center |
-| `RR` | Rear Right |
-
 ## Validation
 
 Lightweight checks after code or README changes:
@@ -400,10 +345,3 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 For manual GUI smoke testing, use the "Open Enhanced GUI" command above and confirm sample switching,
 trajectory selection, BEV/FC projection, speed hover, delete/keep, manual Bezier save, and GT speed
 editing still work as expected.
-
-## Notes
-
-- Trajectories are in BEV coordinates: `[x_right, y_forward, z_up]` in meters.
-- Projection uses the raw distorted camera model with `opencv_rational_8` distortion.
-- The enhanced GUI implementation has been split into `traj_gui_enhanced/`; the root
-  `trajectory_gui_enhanced.py` file is intentionally a thin compatibility wrapper.

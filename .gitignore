@@ -41,3 +41,5 @@ k_means/kmeans_stop_results.txt
 .DS_Store
 .idea/
 .vscode/
+
+tests/

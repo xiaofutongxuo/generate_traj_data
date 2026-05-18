@@ -29,96 +29,105 @@ from ..cluster_utils import *
 class WidgetLayoutMixin:
 
     def _create_widgets(self):
-        """Create GUI widgets."""
-        main_frame = tk.Frame(self.root, bg="#2b2b2b")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        """Create GUI widgets with a modern dark theme."""
+        # Style configuration
+        style = ttk.Style()
+        if 'clam' in style.theme_names():
+            style.theme_use('clam')
         
-        # Title bar
-        title_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        title_frame.pack(fill=tk.X)
+        # Color Palette
+        BG_MAIN = "#1E1E1E"
+        BG_PANEL = "#252526"
+        BG_HEADER = "#333333"
+        FG_PRIMARY = "#FFFFFF"
+        FG_SECONDARY = "#CCCCCC"
+        
+        # Configure global window background
+        self.root.configure(bg=BG_MAIN)
+        
+        main_frame = tk.Frame(self.root, bg=BG_MAIN)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        
+        # --- Top Header Bar ---
+        header_frame = tk.Frame(main_frame, bg=BG_PANEL, relief=tk.FLAT, bd=0)
+        header_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        title_frame = tk.Frame(header_frame, bg=BG_PANEL)
+        title_frame.pack(fill=tk.X, padx=10, pady=8)
         
         self.title_label = tk.Label(
             title_frame, text="Trajectory Viewer",
-            font=("Arial", 16, "bold"), fg="white", bg="#2b2b2b",
+            font=("Segoe UI", 14, "bold"), fg=FG_PRIMARY, bg=BG_PANEL,
         )
         self.title_label.pack(side=tk.LEFT)
         
         self.nav_label = tk.Label(
             title_frame, text="",
-            font=("Arial", 12), fg="#888888", bg="#2b2b2b",
+            font=("Segoe UI", 12), fg=FG_SECONDARY, bg=BG_PANEL,
         )
         self.nav_label.pack(side=tk.RIGHT)
 
-        jump_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        jump_frame.pack(fill=tk.X, pady=(8, 0))
+        jump_frame = tk.Frame(header_frame, bg=BG_PANEL)
+        jump_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
 
-        tk.Label(
-            jump_frame, text="Dataset",
-            font=("Arial", 10), fg="white", bg="#2b2b2b",
-        ).pack(side=tk.LEFT, padx=(0, 4))
+        # Helper for modern flat buttons
+        def FlatButton(parent, text, command, bg, fg="white", **kwargs):
+            return tk.Button(
+                parent, text=text, command=command, bg=bg, fg=fg,
+                activebackground=bg, activeforeground="white",
+                relief=tk.FLAT, borderwidth=0, cursor="hand2", **kwargs
+            )
+
+        tk.Label(jump_frame, text="Dataset", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.dataset_var = tk.StringVar()
-        self.dataset_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.dataset_var,
-            values=self.datasets,
-            state="readonly",
-            width=30,
-        )
-        self.dataset_combo.pack(side=tk.LEFT, padx=(0, 8))
+        self.dataset_combo = ttk.Combobox(jump_frame, textvariable=self.dataset_var, values=self.datasets, state="readonly", width=30)
+        self.dataset_combo.pack(side=tk.LEFT, padx=(0, 12))
         self.dataset_combo.bind("<<ComboboxSelected>>", self._on_dataset_combo_selected)
+        self._bind_arrow_keys_for_trajectory_navigation(self.dataset_combo)
 
-        tk.Label(
-            jump_frame, text="Clip",
-            font=("Arial", 10), fg="white", bg="#2b2b2b",
-        ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(jump_frame, text="Clip", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.clip_var = tk.StringVar()
-        self.clip_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.clip_var,
-            state="readonly",
-            width=24,
-        )
-        self.clip_combo.pack(side=tk.LEFT, padx=(0, 8))
+        self.clip_combo = ttk.Combobox(jump_frame, textvariable=self.clip_var, state="readonly", width=24)
+        self.clip_combo.pack(side=tk.LEFT, padx=(0, 12))
         self.clip_combo.bind("<<ComboboxSelected>>", self._on_clip_combo_selected)
+        self._bind_arrow_keys_for_trajectory_navigation(self.clip_combo)
 
-        tk.Label(
-            jump_frame, text="t0",
-            font=("Arial", 10), fg="white", bg="#2b2b2b",
-        ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(jump_frame, text="t0", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.t0_var = tk.StringVar()
-        self.t0_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.t0_var,
-            state="readonly",
-            width=22,
-        )
-        self.t0_combo.pack(side=tk.LEFT, padx=(0, 8))
+        self.t0_combo = ttk.Combobox(jump_frame, textvariable=self.t0_var, state="readonly", width=22)
+        self.t0_combo.pack(side=tk.LEFT, padx=(0, 16))
+        self._bind_arrow_keys_for_trajectory_navigation(self.t0_combo)
 
-        ttk.Button(
-            jump_frame, text="Jump", command=self._jump_to_selected_sample,
-        ).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(
-            jump_frame, text="Current", command=self._sync_sample_selectors,
-        ).pack(side=tk.LEFT)
+        tk.Label(jump_frame, text="Scene", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
+        self.scene_filter_var = tk.StringVar(value=getattr(self, "scene_filter_value", "None"))
+        self.scene_filter_combo = ttk.Combobox(
+            jump_frame,
+            textvariable=self.scene_filter_var,
+            state="readonly",
+            width=18,
+        )
+        self.scene_filter_combo.pack(side=tk.LEFT, padx=(0, 16))
+        self.scene_filter_combo.bind("<<ComboboxSelected>>", self._on_scene_filter_selected)
+        self._bind_arrow_keys_for_trajectory_navigation(self.scene_filter_combo)
+
+        FlatButton(jump_frame, "Jump", self._jump_to_selected_sample, bg="#2196F3", padx=16, pady=4).pack(side=tk.LEFT, padx=(0, 8))
+        FlatButton(jump_frame, "Current", self._sync_sample_selectors, bg="#607D8B", padx=16, pady=4).pack(side=tk.LEFT)
         
-        # Content area
-        content_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        content_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        # --- Content Area ---
+        content_frame = tk.Frame(main_frame, bg=BG_MAIN)
+        content_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Left panel - Bird's eye view
-        left_frame = tk.Frame(content_frame, bg="#1e1e1e")
-        left_frame.pack(side=tk.LEFT, fill=tk.Y)
+        # 1. Left panel - Bird's eye view & Speeds
+        left_frame = tk.Frame(content_frame, bg=BG_PANEL)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         
-        tk.Label(
-            left_frame, text="Bird's Eye View",
-            font=("Arial", 12, "bold"), fg="white", bg="#1e1e1e",
-        ).pack(pady=5)
+        tk.Label(left_frame, text="Bird's Eye View", font=("Segoe UI", 12, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(pady=(10, 5))
         
         self.traj_canvas = tk.Canvas(
             left_frame, width=self.bev_canvas_width, height=self.bev_canvas_height,
-            bg="#1e1e1e", highlightthickness=0,
+            bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.traj_canvas.pack(padx=5, pady=5)
+        self.traj_canvas.pack(padx=10, pady=(0, 10))
         self.traj_canvas.bind("<Button-1>", self._on_canvas_click)
         self.traj_canvas.bind("<B1-Motion>", self._on_canvas_left_drag)
         self.traj_canvas.bind("<ButtonRelease-1>", self._on_left_release)
@@ -128,216 +137,125 @@ class WidgetLayoutMixin:
         self.traj_canvas.bind("<Motion>", self._on_traj_canvas_motion)
         self.traj_canvas.bind("<Leave>", lambda _event: self._hide_stop_tooltip())
 
-        pred_speed_header = tk.Frame(left_frame, bg="#1e1e1e")
-        pred_speed_header.pack(fill=tk.X, pady=(8, 2))
-        tk.Label(
-            pred_speed_header, text="Diversity Speed Profile",
-            font=("Arial", 12, "bold"), fg="white", bg="#1e1e1e",
-        ).pack(side=tk.LEFT)
-        tk.Button(
-            pred_speed_header,
-            text="优化速度曲线",
-            command=self._optimize_pred_speed_curve,
-            bg="#34495e",
-            fg="white",
-            padx=8,
-            pady=2,
-        ).pack(side=tk.RIGHT, padx=(0, 5))
+        # Speed Profiles
+        ttk.Separator(left_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
+        
+        pred_speed_header = tk.Frame(left_frame, bg=BG_PANEL)
+        pred_speed_header.pack(fill=tk.X, padx=10, pady=(5, 2))
+        tk.Label(pred_speed_header, text="Diversity Speed Profile", font=("Segoe UI", 11, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(side=tk.LEFT)
+        FlatButton(pred_speed_header, "优化速度曲线", self._optimize_pred_speed_curve, bg="#34495e", padx=10, pady=2).pack(side=tk.RIGHT)
+        
         self.speed_canvas = tk.Canvas(
-            left_frame,
-            width=self.speed_canvas_width,
-            height=self.speed_canvas_height,
-            bg="#171717",
-            highlightthickness=0,
+            left_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
+            bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.speed_canvas.pack(padx=5, pady=(0, 5))
+        self.speed_canvas.pack(padx=10, pady=(0, 5))
         self.speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "pred"))
         self.speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("pred", None))
-        self.pred_speed_action_frame = tk.Frame(left_frame, bg="#1e1e1e")
-        tk.Button(
-            self.pred_speed_action_frame,
-            text="接受",
-            command=self._save_speed_edit,
-            bg="#1f8f5f",
-            fg="white",
-            padx=16,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            self.pred_speed_action_frame,
-            text="取消",
-            command=lambda: self._cancel_speed_edit(redraw=True),
-            bg="#7f8c8d",
-            fg="white",
-            padx=16,
-        ).pack(side=tk.LEFT, padx=5)
+        self.speed_canvas.bind("<Button-1>", self._on_speed_canvas_left_down)
+        self.speed_canvas.bind("<B1-Motion>", self._on_speed_canvas_left_drag)
+        self.speed_canvas.bind("<ButtonRelease-1>", self._on_speed_canvas_left_release)
+        
+        self.pred_speed_action_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        FlatButton(self.pred_speed_action_frame, "接受", self._save_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
+        FlatButton(self.pred_speed_action_frame, "取消", lambda: self._cancel_speed_edit(redraw=True), bg="#F44336", padx=16).pack(side=tk.LEFT)
 
-        self.gt_speed_header_frame = tk.Frame(left_frame, bg="#1e1e1e")
-        self.gt_speed_header_frame.pack(fill=tk.X, pady=(6, 2))
-        tk.Label(
-            self.gt_speed_header_frame, text="GT Speed Profile",
-            font=("Arial", 12, "bold"), fg="white", bg="#1e1e1e",
-        ).pack(side=tk.LEFT)
-        tk.Button(
-            self.gt_speed_header_frame,
-            text="优化速度曲线",
-            command=self._optimize_gt_speed_curve,
-            bg="#5d6d7e",
-            fg="white",
-            padx=8,
-            pady=2,
-        ).pack(side=tk.RIGHT, padx=(0, 5))
-        tk.Button(
-            self.gt_speed_header_frame,
-            text="停车添加",
-            command=self._start_gt_stop_add,
-            bg="#8e3b35",
-            fg="white",
-            padx=8,
-            pady=2,
-        ).pack(side=tk.RIGHT, padx=(0, 5))
+        gt_speed_header_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        gt_speed_header_frame.pack(fill=tk.X, padx=10, pady=(10, 2))
+        tk.Label(gt_speed_header_frame, text="GT Speed Profile", font=("Segoe UI", 11, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(side=tk.LEFT)
+        FlatButton(gt_speed_header_frame, "优化速度曲线", self._optimize_gt_speed_curve, bg="#5d6d7e", padx=10, pady=2).pack(side=tk.RIGHT)
+        FlatButton(gt_speed_header_frame, "停车添加", self._start_gt_stop_add, bg="#D32F2F", padx=10, pady=2).pack(side=tk.RIGHT, padx=(0, 5))
+        
         self.gt_speed_canvas = tk.Canvas(
-            left_frame,
-            width=self.speed_canvas_width,
-            height=self.speed_canvas_height,
-            bg="#171717",
-            highlightthickness=0,
+            left_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
+            bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.gt_speed_canvas.pack(padx=5, pady=(0, 5))
+        self.gt_speed_canvas.pack(padx=10, pady=(0, 5))
         self.gt_speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "gt"))
         self.gt_speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("gt", None))
         self.gt_speed_canvas.bind("<Button-1>", self._on_gt_speed_canvas_click)
-        self.gt_speed_action_frame = tk.Frame(left_frame, bg="#1e1e1e")
-        tk.Button(
-            self.gt_speed_action_frame,
-            text="接受",
-            command=self._save_gt_speed_edit,
-            bg="#1f8f5f",
-            fg="white",
-            padx=16,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            self.gt_speed_action_frame,
-            text="取消",
-            command=lambda: self._cancel_gt_speed_edit(redraw=True),
-            bg="#7f8c8d",
-            fg="white",
-            padx=16,
-        ).pack(side=tk.LEFT, padx=5)
-        self.gt_stop_action_frame = tk.Frame(left_frame, bg="#1e1e1e")
-        tk.Button(
-            self.gt_stop_action_frame,
-            text="保存",
-            command=self._save_gt_speed_edit,
-            bg="#1f8f5f",
-            fg="white",
-            padx=14,
-        ).pack(side=tk.LEFT, padx=4)
-        tk.Button(
-            self.gt_stop_action_frame,
-            text="取消",
-            command=lambda: self._cancel_gt_speed_edit(redraw=True),
-            bg="#7f8c8d",
-            fg="white",
-            padx=14,
-        ).pack(side=tk.LEFT, padx=4)
-        tk.Button(
-            self.gt_stop_action_frame,
-            text="撤回",
-            command=self._undo_gt_stop_add,
-            bg="#a56a22",
-            fg="white",
-            padx=14,
-        ).pack(side=tk.LEFT, padx=4)
         
-        # Middle panel - Camera images with projection
-        middle_frame = tk.Frame(content_frame, bg="#2b2b2b")
-        middle_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=10)
+        self.gt_speed_action_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        FlatButton(self.gt_speed_action_frame, "接受", self._save_gt_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
+        FlatButton(self.gt_speed_action_frame, "取消", lambda: self._cancel_gt_speed_edit(redraw=True), bg="#F44336", padx=16).pack(side=tk.LEFT)
         
-        # Camera selection
-        cam_select_frame = tk.Frame(middle_frame, bg="#2b2b2b")
-        cam_select_frame.pack(fill=tk.X)
+        self.gt_stop_action_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        FlatButton(self.gt_stop_action_frame, "保存", self._save_gt_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
+        FlatButton(self.gt_stop_action_frame, "取消", lambda: self._cancel_gt_speed_edit(redraw=True), bg="#F44336", padx=16).pack(side=tk.LEFT, padx=(0, 5))
+        FlatButton(self.gt_stop_action_frame, "撤回", self._undo_gt_stop_add, bg="#FF9800", padx=16).pack(side=tk.LEFT)
         
-        tk.Label(
-            cam_select_frame, text="Projection Camera:",
-            font=("Arial", 10), fg="white", bg="#2b2b2b",
-        ).pack(side=tk.LEFT, padx=5)
+        # 2. Middle panel - Camera images with projection
+        middle_frame = tk.Frame(content_frame, bg=BG_PANEL)
+        middle_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
+        cam_select_frame = tk.Frame(middle_frame, bg=BG_PANEL)
+        cam_select_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(cam_select_frame, text="Projection Camera:", font=("Segoe UI", 10, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 10))
         
         self.cam_var = tk.StringVar(value=self.current_cam_for_projection)
         for cam in ["FL", "FC", "FR", "RL", "RC", "RR"]:
             tk.Radiobutton(
                 cam_select_frame, text=cam, variable=self.cam_var, value=cam,
                 command=lambda c=cam: self._set_projection_camera(c),
-                bg="#2b2b2b", fg="white", selectcolor="#444444",
-                activebackground="#2b2b2b", activeforeground="white",
-            ).pack(side=tk.LEFT, padx=2)
+                bg=BG_PANEL, fg=FG_SECONDARY, selectcolor=BG_MAIN,
+                activebackground=BG_PANEL, activeforeground=FG_PRIMARY, font=("Segoe UI", 9)
+            ).pack(side=tk.LEFT, padx=4)
         
-        # Camera image labels. Rear cameras sit side-by-side above the larger FC view.
         self.camera_labels = {}
 
         def create_camera_panel(parent, cam, side=tk.TOP, expand=False):
-            cam_frame = tk.Frame(parent, bg="#1e1e1e")
-            cam_frame.pack(side=side, expand=expand, padx=4, pady=4)
-
-            tk.Label(
-                cam_frame, text=cam,
-                font=("Arial", 10, "bold"), fg="white", bg="#1e1e1e",
-            ).pack()
-
-            self.camera_labels[cam] = tk.Label(cam_frame, bg="#1e1e1e")
-            self.camera_labels[cam].pack()
-            self.camera_labels[cam].bind(
-                "<Button-1>",
-                lambda event, camera=cam: self._on_camera_click(event, camera),
-            )
-            self.camera_labels[cam].bind(
-                "<Button-3>",
-                lambda event, camera=cam: self._on_camera_right_down(event, camera),
-            )
-            self.camera_labels[cam].bind(
-                "<B3-Motion>",
-                lambda event, camera=cam: self._on_camera_right_drag(event, camera),
-            )
+            cam_frame = tk.Frame(parent, bg=BG_MAIN, highlightthickness=1, highlightbackground="#333333")
+            cam_frame.pack(side=side, expand=expand, fill=tk.BOTH, padx=4, pady=4)
+            tk.Label(cam_frame, text=cam, font=("Segoe UI", 10, "bold"), fg=FG_PRIMARY, bg=BG_HEADER).pack(fill=tk.X)
+            self.camera_labels[cam] = tk.Label(cam_frame, bg=BG_MAIN)
+            self.camera_labels[cam].pack(expand=True, fill=tk.BOTH)
+            self.camera_labels[cam].bind("<Button-1>", lambda event, camera=cam: self._on_camera_click(event, camera))
+            self.camera_labels[cam].bind("<Button-3>", lambda event, camera=cam: self._on_camera_right_down(event, camera))
+            self.camera_labels[cam].bind("<B3-Motion>", lambda event, camera=cam: self._on_camera_right_drag(event, camera))
             self.camera_labels[cam].bind("<ButtonRelease-3>", self._on_right_release)
 
-        top_camera_row = tk.Frame(middle_frame, bg="#2b2b2b")
-        top_camera_row.pack(fill=tk.X, pady=(5, 4))
-        main_camera_area = tk.Frame(middle_frame, bg="#2b2b2b")
-        main_camera_area.pack(fill=tk.BOTH, expand=True)
+        top_camera_row = tk.Frame(middle_frame, bg=BG_PANEL)
+        top_camera_row.pack(fill=tk.X, padx=6)
+        main_camera_area = tk.Frame(middle_frame, bg=BG_PANEL)
+        main_camera_area.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
         top_cameras = [cam for cam in ("RL", "RR") if cam in self.cameras]
-        remaining_top_cameras = [
-            cam for cam in self.cameras
-            if cam not in top_cameras and cam != "FC"
-        ]
+        remaining_top_cameras = [cam for cam in self.cameras if cam not in top_cameras and cam != "FC"]
         top_cameras.extend(remaining_top_cameras)
 
         for cam in top_cameras:
             create_camera_panel(top_camera_row, cam, side=tk.LEFT, expand=True)
 
         if "FC" in self.cameras:
-            create_camera_panel(main_camera_area, "FC", side=tk.TOP, expand=False)
+            create_camera_panel(main_camera_area, "FC", side=tk.TOP, expand=True)
         
-        # Right panel - Trajectory list
-        right_frame = tk.Frame(content_frame, bg="#2b2b2b", width=460)
+        # 3. Right panel - Trajectory list, CoT, Clusters using PanedWindow
+        right_frame = tk.Frame(content_frame, bg=BG_PANEL, width=460)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH)
         right_frame.pack_propagate(False)
         
-        tk.Label(
-            right_frame, text="Trajectories:",
-            font=("Arial", 12, "bold"), fg="white", bg="#2b2b2b",
-        ).pack(anchor=tk.W, pady=(0, 5))
+        style.configure("Dark.TLabelframe", background=BG_PANEL, foreground=FG_PRIMARY)
+        style.configure("Dark.TLabelframe.Label", background=BG_PANEL, foreground=FG_PRIMARY, font=("Segoe UI", 10, "bold"))
         
-        list_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        list_frame.pack(fill=tk.X, pady=(0, 6))
+        # We use a TPanedwindow to allow resizing sections
+        paned_window = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
+        paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
+
+        # Pane 1: Trajectories
+        traj_pane = ttk.LabelFrame(paned_window, text="Trajectories", style="Dark.TLabelframe")
+        paned_window.add(traj_pane, weight=3)
+        
+        list_frame = tk.Frame(traj_pane, bg=BG_PANEL)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         list_scroll = tk.Scrollbar(list_frame)
         list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.traj_listbox = tk.Listbox(
             list_frame, yscrollcommand=list_scroll.set,
-            font=("Courier", 10), bg="#1e1e1e", fg="white",
-            selectbackground="#444444", selectforeground="white", height=20,
-            width=56,
-            justify=tk.LEFT,
+            font=("Consolas", 10), bg="#121212", fg=FG_PRIMARY,
+            selectbackground="#2196F3", selectforeground="white", height=12,
+            width=56, justify=tk.LEFT, relief=tk.FLAT, highlightthickness=1, highlightbackground="#333333"
         )
         self.traj_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         list_scroll.config(command=self.traj_listbox.yview)
@@ -345,208 +263,122 @@ class WidgetLayoutMixin:
         self.traj_listbox.bind("<Motion>", self._on_traj_list_motion)
         self.traj_listbox.bind("<Leave>", lambda _event: self._hide_traj_list_tooltip())
 
-        tk.Label(
-            right_frame, text="CoT:",
-            font=("Arial", 12, "bold"), fg="white", bg="#2b2b2b",
-        ).pack(anchor=tk.W, pady=(10, 5))
-
+        # Pane 2: Chain of Thought
+        cot_pane = ttk.LabelFrame(paned_window, text="Chain of Thought", style="Dark.TLabelframe")
+        paned_window.add(cot_pane, weight=2)
+        
         self.cot_text = tk.Text(
-            right_frame,
-            height=12,
-            width=42,
-            wrap=tk.WORD,
-            font=("Arial", 9),
-            bg="#1e1e1e",
-            fg="#dddddd",
-            insertbackground="white",
+            cot_pane, height=8, width=42, wrap=tk.WORD,
+            font=("Segoe UI", 9), bg="#121212", fg=FG_SECONDARY,
+            insertbackground="white", relief=tk.FLAT, highlightthickness=1, highlightbackground="#333333"
         )
-        self.cot_text.pack(fill=tk.BOTH, expand=False)
+        self.cot_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         self.cot_text.configure(state=tk.DISABLED)
 
-        cluster_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        cluster_frame.pack(fill=tk.X, pady=(10, 4))
-        tk.Label(
-            cluster_frame, text="Cluster Centers:",
-            font=("Arial", 12, "bold"), fg="white", bg="#2b2b2b",
-        ).pack(anchor=tk.W, pady=(0, 5))
+        # Pane 3: Cluster Centers
+        cluster_pane = ttk.LabelFrame(paned_window, text="Cluster Centers", style="Dark.TLabelframe")
+        paned_window.add(cluster_pane, weight=0)
+        
+        cluster_inner = tk.Frame(cluster_pane, bg=BG_PANEL)
+        cluster_inner.pack(fill=tk.X, padx=8, pady=8)
 
-        cluster_select_frame = tk.Frame(cluster_frame, bg="#2b2b2b")
+        cluster_select_frame = tk.Frame(cluster_inner, bg=BG_PANEL)
         cluster_select_frame.pack(fill=tk.X)
-        cluster_button_frame = tk.Frame(cluster_frame, bg="#2b2b2b")
-        cluster_button_frame.pack(fill=tk.X, pady=(5, 0))
+        cluster_button_frame = tk.Frame(cluster_inner, bg=BG_PANEL)
+        cluster_button_frame.pack(fill=tk.X, pady=(10, 0))
 
         self.cluster_category_var = tk.StringVar(value="stop")
-        self.cluster_category_combo = ttk.Combobox(
-            cluster_select_frame,
-            textvariable=self.cluster_category_var,
-            values=CLUSTER_CATEGORY_ORDER,
-            state="readonly",
-            width=12,
-        )
+        self.cluster_category_combo = ttk.Combobox(cluster_select_frame, textvariable=self.cluster_category_var, values=CLUSTER_CATEGORY_ORDER, state="readonly", width=12)
         self.cluster_category_combo.pack(side=tk.LEFT, padx=(0, 5))
-        self.cluster_category_combo.bind(
-            "<<ComboboxSelected>>",
-            self._on_cluster_category_selected,
-        )
+        self.cluster_category_combo.bind("<<ComboboxSelected>>", self._on_cluster_category_selected)
+        self._bind_arrow_keys_for_trajectory_navigation(self.cluster_category_combo)
 
         self.cluster_choice_var = tk.StringVar()
-        self.cluster_choice_combo = ttk.Combobox(
-            cluster_select_frame,
-            textvariable=self.cluster_choice_var,
-            state="readonly",
-            width=26,
-        )
+        self.cluster_choice_combo = ttk.Combobox(cluster_select_frame, textvariable=self.cluster_choice_var, state="readonly", width=26)
         self.cluster_choice_combo.pack(side=tk.LEFT, padx=(0, 5))
-        self.cluster_choice_combo.bind(
-            "<<ComboboxSelected>>",
-            self._on_cluster_choice_selected,
-        )
+        self.cluster_choice_combo.bind("<<ComboboxSelected>>", self._on_cluster_choice_selected)
+        self._bind_arrow_keys_for_trajectory_navigation(self.cluster_choice_combo)
 
-        tk.Button(
-            cluster_button_frame, text="-", command=lambda: self._cycle_selected_cluster_center(-1),
-            bg="#7f8c8d", fg="white", padx=8, width=2,
-        ).pack(side=tk.LEFT, padx=(0, 3))
-        tk.Button(
-            cluster_button_frame, text="+", command=lambda: self._cycle_selected_cluster_center(1),
-            bg="#7f8c8d", fg="white", padx=8, width=2,
-        ).pack(side=tk.LEFT, padx=(0, 5))
-        tk.Button(
-            cluster_button_frame, text="Confirm Save", command=self._save_selected_cluster_center_trajectory,
-            bg="#ba6f1e", fg="white", padx=8,
-        ).pack(side=tk.LEFT)
+        FlatButton(cluster_button_frame, "-", lambda: self._cycle_selected_cluster_center(-1), bg="#607D8B", padx=12).pack(side=tk.LEFT, padx=(0, 5))
+        FlatButton(cluster_button_frame, "+", lambda: self._cycle_selected_cluster_center(1), bg="#607D8B", padx=12).pack(side=tk.LEFT, padx=(0, 10))
+        FlatButton(cluster_button_frame, "Confirm Save", self._save_selected_cluster_center_trajectory, bg="#FF9800", padx=16).pack(side=tk.LEFT, padx=(0, 5))
+        FlatButton(cluster_button_frame, "Hide", self._hide_cluster_preview, bg="#607D8B", padx=14).pack(side=tk.LEFT)
         self._refresh_cluster_choice_values()
         
-        # Status bar
-        status_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        status_frame.pack(fill=tk.X, pady=(10, 0))
+        # --- Bottom Control Panels ---
+        controls_outer_frame = tk.Frame(main_frame, bg=BG_MAIN)
+        controls_outer_frame.pack(fill=tk.X, pady=(10, 0))
         
-        self.status_label = tk.Label(
-            status_frame, text="",
-            font=("Arial", 10), fg="#888888", bg="#2b2b2b",
-        )
-        self.status_label.pack(side=tk.LEFT)
-        
-        # Buttons
-        controls_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        controls_frame.pack(fill=tk.X, pady=(8, 0))
-        btn_frame = tk.Frame(controls_frame, bg="#2b2b2b")
-        btn_frame.pack(anchor=tk.E, pady=(0, 6))
-        btn_frame_2 = tk.Frame(controls_frame, bg="#2b2b2b")
-        btn_frame_2.pack(anchor=tk.E)
+        control_font = ("Segoe UI", 10, "bold")
+        btn_padx, btn_pady = 12, 6
 
-        control_font = ("Arial", 10, "bold")
-        control_button_opts = {
-            "font": control_font,
-            "padx": 14,
-            "pady": 6,
-        }
+        # Group 1: Drawing & Bezier Tools
+        draw_group = ttk.LabelFrame(controls_outer_frame, text="Drawing & Bezier Tools", style="Dark.TLabelframe")
+        draw_group.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        draw_inner = tk.Frame(draw_group, bg=BG_PANEL)
+        draw_inner.pack(padx=8, pady=8)
 
         self.draw_line_var = tk.BooleanVar(value=self.draw_line_enabled)
         tk.Checkbutton(
-            btn_frame, text="Draw Bezier", variable=self.draw_line_var,
-            command=self._toggle_draw_line,
-            bg="#2b2b2b", fg="white", selectcolor="#444444",
-            activebackground="#2b2b2b", activeforeground="white",
-            font=control_font,
-            padx=8,
-            pady=4,
-        ).pack(side=tk.LEFT, padx=5)
+            draw_inner, text="Draw Bezier", variable=self.draw_line_var, command=self._toggle_draw_line,
+            bg=BG_PANEL, fg=FG_PRIMARY, selectcolor=BG_MAIN, activebackground=BG_PANEL, activeforeground=FG_PRIMARY,
+            font=control_font
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
-        tk.Button(
-            btn_frame, text="Add Final Stop", command=self._add_final_stop_point,
-            bg="#b03a2e", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-
-        tk.Label(
-            btn_frame, text="Stop Time(s)", bg="#2b2b2b", fg="#dddddd",
-            font=control_font,
-        ).pack(side=tk.LEFT, padx=(4, 2))
+        FlatButton(draw_inner, "Add Final Stop", self._add_final_stop_point, bg="#D32F2F", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        
+        tk.Label(draw_inner, text="Stop(s):", bg=BG_PANEL, fg=FG_SECONDARY, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 2))
         self.stop_duration_var = tk.DoubleVar(value=self.stop_duration_seconds)
         stop_spin = tk.Spinbox(
-            btn_frame,
-            from_=0.5,
-            to=5.0,
-            increment=0.5,
-            width=4,
-            textvariable=self.stop_duration_var,
-            command=self._update_stop_duration_seconds,
-            bg="#1e1e1e",
-            fg="white",
-            insertbackground="white",
-            font=control_font,
+            draw_inner, from_=0.5, to=5.0, increment=0.5, width=4, textvariable=self.stop_duration_var,
+            command=self._update_stop_duration_seconds, bg="#121212", fg=FG_PRIMARY, insertbackground="white", font=control_font, relief=tk.FLAT
         )
-        stop_spin.pack(side=tk.LEFT, padx=(0, 5))
+        stop_spin.pack(side=tk.LEFT, padx=(0, 8))
         stop_spin.bind("<Return>", lambda _event: self._update_stop_duration_seconds())
         stop_spin.bind("<FocusOut>", lambda _event: self._update_stop_duration_seconds())
 
-        tk.Button(
-            btn_frame, text="Undo Control", command=self._undo_manual_point,
-            bg="#7f8c8d", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
+        FlatButton(draw_inner, "Undo Control", self._undo_manual_point, bg="#757575", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(draw_inner, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        FlatButton(draw_inner, "Save Curve Traj", self._save_manual_bezier_trajectory, bg="#009688", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(draw_inner, "Save Bezier Center", self._save_manual_bezier_as_cluster_center, bg="#FF9800", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(draw_inner, "Delete Bezier Center", self._delete_current_bezier_cluster_center, bg="#F44336", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
 
-        tk.Button(
-            btn_frame_2, text="Save Curve Traj", command=self._save_manual_bezier_trajectory,
-            bg="#16a085", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            btn_frame_2, text="Save Bezier Center", command=self._save_manual_bezier_as_cluster_center,
-            bg="#d68910", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            btn_frame_2, text="Delete Current Bezier Center", command=self._delete_current_bezier_cluster_center,
-            bg="#a93226", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
+        # Group 2: Trajectory Editing
+        edit_group = ttk.LabelFrame(controls_outer_frame, text="Trajectory Editing", style="Dark.TLabelframe")
+        edit_group.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        edit_inner = tk.Frame(edit_group, bg=BG_PANEL)
+        edit_inner.pack(padx=8, pady=8)
 
-        tk.Button(
-            btn_frame_2, text="Edit Traj", command=self._start_saved_trajectory_edit,
-            bg="#1f77b4", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            btn_frame_2, text="Save Edit", command=self._save_saved_trajectory_edit,
-            bg="#1e8449", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            btn_frame_2, text="Cancel Edit", command=self._cancel_saved_trajectory_edit,
-            bg="#7f8c8d", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            btn_frame_2, text="Restore Edit", command=self._restore_saved_trajectory_edit,
-            bg="#566573", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
+        FlatButton(edit_inner, "Edit Traj", self._start_saved_trajectory_edit, bg="#2196F3", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(edit_inner, "Save Edit", self._save_saved_trajectory_edit, bg="#4CAF50", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(edit_inner, "Cancel Edit", self._cancel_saved_trajectory_edit, bg="#9E9E9E", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(edit_inner, "Restore Edit", self._restore_saved_trajectory_edit, bg="#607D8B", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
 
-        tk.Button(
-            btn_frame_2, text="Repair GT", command=self._repair_gt_future,
-            bg="#9b59b6", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        tk.Button(
-            btn_frame_2, text="Restore GT", command=self._restore_gt_future,
-            bg="#566573", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
+        # Group 3: GT & Global Actions
+        action_group = ttk.LabelFrame(controls_outer_frame, text="GT & Global Actions", style="Dark.TLabelframe")
+        action_group.pack(side=tk.LEFT, fill=tk.Y)
+        action_inner = tk.Frame(action_group, bg=BG_PANEL)
+        action_inner.pack(padx=8, pady=8)
+
+        FlatButton(action_inner, "Repair GT", self._repair_gt_future, bg="#9C27B0", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(action_inner, "Restore GT", self._restore_gt_future, bg="#795548", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(action_inner, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        FlatButton(action_inner, "Delete (Del)", self._delete_traj, bg="#F44336", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(action_inner, "Undo Delete", lambda: self._undo_delete_traj(redraw=True), bg="#4CAF50", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        FlatButton(action_inner, "Confirm Save (Ctrl+S)", self._save_results, bg="#2196F3", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+
+        # --- Status & Help ---
+        footer_frame = tk.Frame(main_frame, bg=BG_MAIN)
+        footer_frame.pack(fill=tk.X, pady=(10, 0))
         
-        tk.Button(
-            btn_frame_2, text="Delete (Del)", command=self._delete_traj,
-            bg="#c0392b", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(
-            btn_frame_2, text="Undo Delete", command=lambda: self._undo_delete_traj(redraw=True),
-            bg="#27ae60", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(
-            btn_frame_2, text="Confirm Save (Ctrl+S)", command=self._save_results,
-            bg="#2980b9", fg="white", **control_button_opts,
-        ).pack(side=tk.LEFT, padx=5)
-        
-        # Help
-        help_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        help_frame.pack(fill=tk.X, pady=(10, 0))
-        
+        self.status_label = tk.Label(footer_frame, text="", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_MAIN)
+        self.status_label.pack(side=tk.LEFT)
+
         tk.Label(
-            help_frame,
-            text="Controls: ←/→ Samples | ↑/↓ Trajectories | +/- Cluster centers | Draw Bezier adds controls | Right-drag controls in BEV/FC edits the same curve | Edit Traj shows BEV handles for saved pseudo-GT | Add Final Stop uses the Bezier endpoint and Stop Time(s) | Repair/Restore GT toggles raw vs velocity-integrated GT | Ctrl+S Save | Q Quit",
-            font=("Arial", 9), fg="#666666", bg="#2b2b2b",
-        ).pack()
+            footer_frame,
+            text="Shortcuts: ←/→ Samples | ↑/↓ Trajectories | +/- Cluster | Ctrl+S Save | Q Quit | Del Delete | Tab Camera",
+            font=("Segoe UI", 9), fg="#757575", bg=BG_MAIN,
+        ).pack(side=tk.RIGHT)
 
     def _set_projection_camera(self, cam):
         """Set camera for trajectory projection."""
@@ -592,7 +424,7 @@ class WidgetLayoutMixin:
         mode_suffix = f" | {' | '.join(mode_parts)}" if mode_parts else ""
         
         self.title_label.config(
-            text=f"Dataset: {dataset_name} | Clip: {clip_stem}{mode_suffix}"
+            text=f"DATASET:  {dataset_name}    |    CLIP:  {clip_stem}{mode_suffix}"
         )
         self.nav_label.config(
             text=f"{self.current_idx + 1} / {len(self.samples)}"

@@ -105,7 +105,10 @@ def _smoothed_history_speed_profile_from_xyz(
         return np.zeros(0, dtype=np.float64)
     smoothed_points = _smooth_history_xyz_for_display(points, passes=xyz_passes)
     raw_speed = _history_speed_profile_from_xyz(smoothed_points, dt_seconds=dt_seconds)
-    return _smooth_display_speed_profile(raw_speed, passes=speed_passes)
+    display_speed = _smooth_display_speed_profile(raw_speed, passes=speed_passes)
+    if len(display_speed):
+        display_speed[-1] = raw_speed[-1]
+    return display_speed
 
 def _smooth_display_speed_profile(
     speed: np.ndarray,

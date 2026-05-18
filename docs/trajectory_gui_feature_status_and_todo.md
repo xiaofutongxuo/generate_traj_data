@@ -238,9 +238,10 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - GUI 默认 `--index_mode video_frames --frame_stride 1`，即使某个有效视频帧还没有生成轨迹，也能显示图像、真实 history、GT 和状态栏覆盖率。
 - 如果某个视频帧没有 output 轨迹，右侧轨迹列表为空，状态栏显示 `Current: no generated`。
 - `load_data()` 新增 history/future valid mask；录制开头真实历史帧不足时，GUI 不绘制无效历史速度/轨迹。
-- 新增全数据集 egomotion 连续性读取与 `filter_t0s_with_full_future()`：跨 clip 时按全局 timestamp 排序；小范围漏帧（相邻 egomotion 缺口 `<=0.3s`）允许插值补齐；较大缺口视为视频不连续，当前帧或相关未来窗口会被过滤掉。
-- 靠近 clip 结尾时，如果后续 clip 时间连续，会接上下一个 clip 的 egomotion；如果后续不存在或不连续，未来 6.4s 不完整的尾部 t0 会被丢弃，不再使用外推出来的 GT future。
-- `filter_t0s_with_full_future()` 已改为向量化计算，避免 GUI 启动时逐 t0 反复排序全量 egomotion timestamp；本机实测 302 个 clip、约 17.2 万个候选 t0 的全量索引过滤约 0.9s。
+- 新增全数据集 egomotion 连续性读取与 `filter_t0s_with_full_future()`：跨 clip 时按全局 timestamp 排序，但只有相邻 egomotion 同时满足小范围时间缺口（`<=0.3s`）和合理空间跳变速度（默认 `<=80m/s`）才视为连续；较大缺口或明显坐标跳变会切断连续段。
+- 靠近 clip 结尾时，如果后续 clip 时间和空间都连续，会接上下一个 clip 的 egomotion；如果后续不存在、不连续或存在坐标系跳变，未来 6.4s 不完整的尾部 t0 会被丢弃，不再使用外推或错误拼接出来的 GT future。
+- `filter_t0s_with_full_future()` 已改为向量化计算，并缓存 dataset 级 egomotion 连续段，避免 GUI 启动时逐 clip/逐 t0 反复切分全量 egomotion；本机实测 302 个 clip、约 15.3 万个有效 t0 的全量索引过滤约 0.86s。
+- clip 开头如果位置坐标系跳变，BEV history 轨迹仍不会跨 clip 错误拼接；但速度面板会优先使用 `vx/vy/vz` 插值得到的 `ego_history_speed_mps`，保留历史速度曲线，避免因为位置 history 不足而整段速度消失。
 - 代码级验证已通过，但还需要进一步用真实推理输出和 GUI 手工浏览检查确认：当前实现没有跑全量模型推理，也没有逐帧打开完整 clip 做人工验收。
 
 后续检查项：
@@ -376,7 +377,46 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - `traj_gui_enhanced/speed_utils.py`
 - `traj_gui_enhanced/math_utils.py`
 
-### P2 TODO-005 增加历史/未来速度统一诊断视图
+### P1 TODO-005 Cluster center 预览隐藏与速度曲线联动（已实现，建议真实 GUI 验收）
+
+需求来源：
+
+- 用户希望 cluster center 预览默认不显示；一旦选择/添加 cluster center 后，如果还没有保存到 output，可以通过隐藏按钮临时不显示这条未保存预览轨迹。
+- 用户澄清：此前提到的“速度曲线不随轨迹切换”主要指 cluster center 模块中新增/切换聚类中心后的预览轨迹；`Diversity Speed Profile` 不应继续显示上一条固定速度曲线，而应跟随当前 cluster preview 轨迹变化。
+
+当前状态：
+
+- `Cluster Centers` 面板已新增 `Hide` 按钮，用于临时隐藏未保存的 cluster preview。
+- `Hide` 只清空 GUI preview 状态：`cluster_preview_record`、`cluster_preview_traj`、`cluster_preview_is_edited`；不删除 cluster center 库文件，也不删除已经保存到 output parquet 的 `source=cluster_center` 轨迹。
+- cluster preview 速度曲线已补回归测试：当当前 `cluster_preview_traj` 改变时，`Diversity Speed Profile` 应重新读取当前 preview 几何轨迹并显示对应速度。
+- 已保存 cluster trajectory 和未保存 preview 的语义仍区分：
+  - preview 是临时轨迹，`Hide` 可隐藏；
+  - 保存后进入右侧 `Trajectories` 列表，按普通扩充轨迹显示/删除/编辑。
+
+已实现改动：
+
+- `traj_gui_enhanced/mixins/cluster_controls.py` 新增 `_hide_cluster_preview()`。
+- `traj_gui_enhanced/mixins/widget_layout.py` 在 `Confirm Save` 旁新增 `Hide` 按钮。
+- `tests/test_gui_helpers.py` 新增：
+  - `test_cluster_preview_hide_clears_unsaved_preview_only`
+  - `test_cluster_preview_speed_profile_follows_current_preview_geometry`
+
+验收建议：
+
+- 选择一个 cluster center 后能看到预览；点击 `Hide` 后预览轨迹和对应速度曲线消失。
+- 切换到另一个 cluster center 后，预览和速度曲线更新为新轨迹。
+- 未点击 `Confirm Save` 时，Hide 不写 parquet；已保存轨迹仍在右侧列表中。
+
+相关文件：
+
+- `traj_gui_enhanced/mixins/cluster_controls.py`
+- `traj_gui_enhanced/mixins/widget_layout.py`
+- `traj_gui_enhanced/mixins/speed_controls.py`
+- `traj_gui_enhanced/mixins/draw_bev.py`
+- `traj_gui_enhanced/mixins/draw_camera.py`
+- `tests/test_gui_helpers.py`
+
+### P2 TODO-006 增加历史/未来速度统一诊断视图
 
 这是 TODO-002 的延伸项。
 
@@ -388,7 +428,7 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - 是否超过加速度阈值；
 - 是否建议优化。
 
-### P2 TODO-006 梳理保存行为和数据版本
+### P2 TODO-007 梳理保存行为和数据版本
 
 当前多个操作会直接写回 active parquet。建议建立更清晰的数据版本策略：
 
@@ -397,7 +437,7 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 - 在 parquet 中增加 `source`、`edit_version`、`edited_by_gui`、`edit_time` 等元数据列。
 - README 和优化日志同步更新真实保存行为。
 
-### P3 TODO-007 Windows 系统支持
+### P3 TODO-008 Windows 系统支持
 
 需求来源：希望工具支持 Windows 使用。
 
@@ -433,7 +473,8 @@ TODO-001 已将默认推理和 GUI 索引改为 10Hz 视频帧逐帧模式。但
 2. TODO-002 已完成：历史速度已叠加到现有两个速度面板中。
 3. TODO-003 已完成：扩充轨迹 staged delete、撤销和确认保存已经可用。
 4. TODO-004 代码闭环已完成：基础 dynamics、保存前优化、已保存轨迹 BEV 关键帧编辑、接受/取消/恢复原状和编辑状态保护已经接入；下一步主要是真实 GUI 验收和手感调参。
-5. 最后做 TODO-007：Windows 支持属于平台化工作，应在核心数据和保存语义稳定后再推进。
+5. TODO-005 已实现代码闭环：cluster center 未保存 preview 可通过 `Hide` 隐藏，cluster preview 切换/拖拽后 `Diversity Speed Profile` 有回归测试保护；仍建议真实 GUI 验收按钮位置和交互手感。
+6. 最后做 TODO-008：Windows 支持属于平台化工作，应在核心数据和保存语义稳定后再推进。
 
 ## 6. 待确认问题
 

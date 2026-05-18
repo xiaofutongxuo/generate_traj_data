@@ -28,6 +28,7 @@ from .mixins.sample_io import SampleIOMixin
 from .mixins.saved_traj_editing import SavedTrajectoryEditingMixin
 from .mixins.speed_controls import SpeedControlsMixin
 from .mixins.widget_layout import WidgetLayoutMixin
+from .scene_labels import build_scene_label_index
 
 
 class TrajectoryViewerEnhanced(
@@ -99,11 +100,16 @@ class TrajectoryViewerEnhanced(
         self.speed_edit_original_xyz = None
         self.speed_edit_speed = None
         self.speed_edit_last_frame = None
+        self.speed_edit_undo_stack = []
+        self.speed_edit_redo_stack = []
+        self.speed_edit_drag_snapshot = None
         self.traj_geom_edit_active = False
         self.traj_geom_edit_dirty = False
         self.traj_geom_edit_traj_idx = None
         self.traj_geom_edit_original_traj = None
         self.traj_geom_edit_original_xyz = None
+        self.traj_geom_edit_undo_stack = []
+        self.traj_geom_edit_redo_stack = []
         self.pred_speed_action_frame = None
         self.gt_speed_action_frame = None
         self.gt_stop_action_frame = None
@@ -141,6 +147,11 @@ class TrajectoryViewerEnhanced(
             start_t0=start_t0,
             restore_last=restore_last,
         )
+        self.scene_label_by_sample, self.scenes_by_dataset = build_scene_label_index(
+            self.data_root,
+            self.samples,
+        )
+        self.scene_filter_value = "None"
         self.trajectories = []
         self.trajectory_states = {}
         self.current_traj_idx = 0
@@ -194,9 +205,11 @@ class TrajectoryViewerEnhanced(
         self.dataset_var = None
         self.clip_var = None
         self.t0_var = None
+        self.scene_filter_var = None
         self.dataset_combo = None
         self.clip_combo = None
         self.t0_combo = None
+        self.scene_filter_combo = None
         
         # Current camera frame for projection (default to FC)
         self.current_cam_for_projection = "FC"
@@ -216,11 +229,15 @@ class TrajectoryViewerEnhanced(
         # Keyboard shortcuts
         self.root.bind("<Left>", lambda e: self._prev_sample())
         self.root.bind("<Right>", lambda e: self._next_sample())
-        self.root.bind("<Up>", lambda e: self._prev_traj())
-        self.root.bind("<Down>", lambda e: self._next_traj())
+        self.root.bind("<Up>", self._on_global_prev_traj_key)
+        self.root.bind("<Down>", self._on_global_next_traj_key)
         self.root.bind("<Delete>", lambda e: self._delete_traj())
         self.root.bind("<BackSpace>", lambda e: self._delete_traj())
         self.root.bind("<Control-s>", lambda e: self._save_results())
+        self.root.bind("<Control-z>", self._on_undo_saved_trajectory_edit_key)
+        self.root.bind("<Control-Z>", self._on_undo_saved_trajectory_edit_key)
+        self.root.bind("<Control-y>", self._on_redo_saved_trajectory_edit_key)
+        self.root.bind("<Control-Y>", self._on_redo_saved_trajectory_edit_key)
         self.root.bind("<q>", lambda e: self.root.quit())
         self.root.bind("<Tab>", lambda e: self._toggle_projection_camera())
         self.root.bind("<KeyPress-minus>", lambda e: self._cycle_selected_cluster_center(-1))

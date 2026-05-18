@@ -116,6 +116,7 @@ class SampleIOMixin:
                     self.data_root,
                     dataset_name,
                     [int(value) for value in candidates.t0_values],
+                    clip_stem=clip_stem,
                 )
                 generated_t0_values = self._generated_t0_values_for_clip(dataset_name, clip_stem)
                 key = (dataset_name, clip_stem)

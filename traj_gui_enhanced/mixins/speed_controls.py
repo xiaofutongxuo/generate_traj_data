@@ -65,13 +65,11 @@ class SpeedControlsMixin:
         }
 
     def _trajectory_speed_profile(self, traj: dict) -> np.ndarray:
+        """Return speed implied by the trajectory geometry currently shown in the GUI."""
         return _speed_profile_from_trajectory(
             traj.get("x", []),
             traj.get("y", []),
             traj.get("z", []),
-            traj.get("vx"),
-            traj.get("vy"),
-            traj.get("vz"),
         )
 
     def _refresh_trajectory_smoothness(self) -> None:
@@ -166,7 +164,37 @@ class SpeedControlsMixin:
             history = _smooth_history_xyz_for_display(history)
         return history
 
+    def _history_speed_mps_from_conv_data(self) -> Optional[np.ndarray]:
+        if self.conv_data is None or "ego_history_speed_mps" not in self.conv_data:
+            return None
+        speed = self.conv_data["ego_history_speed_mps"]
+        if hasattr(speed, "detach"):
+            speed = speed.detach().cpu().numpy()
+        speed = np.asarray(speed, dtype=np.float64).reshape(-1)
+        mask = self.conv_data.get("ego_history_speed_valid_mask")
+        if mask is not None:
+            if hasattr(mask, "detach"):
+                mask = mask.detach().cpu().numpy()
+            mask = np.asarray(mask, dtype=bool).reshape(-1)
+            if len(mask) == len(speed):
+                speed = speed[mask]
+        speed = speed[np.isfinite(speed)]
+        if len(speed) == 0:
+            return None
+        display_speed = _smooth_display_speed_profile(speed, passes=1)
+        if len(display_speed):
+            display_speed[-1] = speed[-1]
+        return display_speed
+
     def _history_speed_profile_source(self) -> tuple[str, np.ndarray, list[dict], str]:
+        velocity_speed = self._history_speed_mps_from_conv_data()
+        if velocity_speed is not None:
+            return (
+                "History",
+                velocity_speed,
+                _detect_stop_segments(velocity_speed),
+                HISTORY_SPEED_COLOR_HEX,
+            )
         history = self._history_points_xyz(smoothed=False)
         if history is None:
             return "History", np.zeros(0, dtype=np.float64), [], HISTORY_SPEED_COLOR_HEX
@@ -438,13 +466,18 @@ class SpeedControlsMixin:
         self._start_speed_edit()
         if not self.speed_edit_active or self.speed_edit_speed is None:
             return
+        geometry_edit_session = self._speed_edit_is_for_active_geometry_edit()
         self.speed_edit_speed = _smooth_speed_profile(self.speed_edit_speed, passes=3)
         self.speed_edit_dirty = True
         if not self._apply_speed_edit_to_trajectory():
             self._cancel_speed_edit(redraw=False)
             messagebox.showwarning("Optimize Failed", "Could not optimize this trajectory speed curve.")
             return
-        self._pack_pred_speed_actions()
+        if geometry_edit_session:
+            self.traj_geom_edit_dirty = True
+            self._hide_pred_speed_actions()
+        else:
+            self._pack_pred_speed_actions()
         self._update_display()
 
     def _optimize_gt_speed_curve(self) -> None:
@@ -541,16 +574,215 @@ class SpeedControlsMixin:
 
     def _on_speed_canvas_left_down(self, event) -> None:
         if not self.speed_edit_active:
-            return
+            if not self._start_speed_edit_for_canvas_interaction():
+                return
+        self.speed_edit_drag_snapshot = self._speed_edit_snapshot()
         self.speed_edit_last_frame = self._speed_canvas_frame_from_x(event.x)
         self._apply_speed_canvas_edit(event)
 
     def _on_speed_canvas_left_drag(self, event) -> None:
+        if not self.speed_edit_active and not self._start_speed_edit_for_canvas_interaction():
+            return
         if self.speed_edit_active:
+            if getattr(self, "speed_edit_drag_snapshot", None) is None:
+                self.speed_edit_drag_snapshot = self._speed_edit_snapshot()
             self._apply_speed_canvas_edit(event)
 
     def _on_speed_canvas_left_release(self, _event) -> None:
+        self._finish_speed_canvas_edit_drag()
         self.speed_edit_last_frame = None
+
+    def _speed_edit_snapshot(self) -> Optional[dict[str, np.ndarray]]:
+        if not getattr(self, "speed_edit_active", False):
+            return None
+        if self.speed_edit_traj_idx is None or self.speed_edit_speed is None:
+            return None
+        idx = int(self.speed_edit_traj_idx)
+        if not (0 <= idx < len(self.trajectories)):
+            return None
+        traj = self.trajectories[idx]
+        try:
+            x = np.asarray(traj["x"], dtype=np.float64)
+            y = np.asarray(traj["y"], dtype=np.float64)
+            z = np.asarray(traj.get("z", np.zeros_like(x)), dtype=np.float64)
+            xyz = np.column_stack([x, y, z])
+        except Exception:
+            return None
+        speed = np.asarray(self.speed_edit_speed, dtype=np.float64)
+        if len(speed) == 0 or len(xyz) == 0:
+            return None
+        return {
+            "speed": speed.copy(),
+            "xyz": xyz.copy(),
+        }
+
+    def _apply_speed_edit_snapshot(self, snapshot: Optional[dict[str, np.ndarray]]) -> bool:
+        if (
+            not getattr(self, "speed_edit_active", False)
+            or snapshot is None
+            or self.speed_edit_traj_idx is None
+            or not (0 <= int(self.speed_edit_traj_idx) < len(self.trajectories))
+        ):
+            return False
+        try:
+            speed = np.asarray(snapshot["speed"], dtype=np.float64).copy()
+            xyz = np.asarray(snapshot["xyz"], dtype=np.float64).reshape(-1, 3).copy()
+        except Exception:
+            return False
+        if len(speed) == 0 or len(xyz) == 0:
+            return False
+        traj = self.trajectories[int(self.speed_edit_traj_idx)]
+        self._apply_components_to_traj(traj, self._trajectory_components_from_xyz(xyz))
+        self.speed_edit_speed = speed
+        self.speed_edit_dirty = True
+        if self._speed_edit_is_for_active_geometry_edit():
+            self.traj_geom_edit_dirty = True
+        if hasattr(self, "_refresh_trajectory_smoothness"):
+            self._refresh_trajectory_smoothness()
+        return True
+
+    def _speed_edit_snapshots_differ(
+        self,
+        before: Optional[dict[str, np.ndarray]],
+        after: Optional[dict[str, np.ndarray]],
+    ) -> bool:
+        if before is None or after is None:
+            return False
+        try:
+            before_speed = np.asarray(before["speed"], dtype=np.float64)
+            after_speed = np.asarray(after["speed"], dtype=np.float64)
+            before_xyz = np.asarray(before["xyz"], dtype=np.float64)
+            after_xyz = np.asarray(after["xyz"], dtype=np.float64)
+        except Exception:
+            return False
+        if before_speed.shape != after_speed.shape or before_xyz.shape != after_xyz.shape:
+            return False
+        return (
+            not np.allclose(before_speed, after_speed, atol=1e-6)
+            or not np.allclose(before_xyz, after_xyz, atol=1e-6)
+        )
+
+    def _record_speed_edit_snapshot(
+        self,
+        before: Optional[dict[str, np.ndarray]],
+        after: Optional[dict[str, np.ndarray]] = None,
+    ) -> bool:
+        if not getattr(self, "speed_edit_active", False):
+            return False
+        if after is None:
+            after = self._speed_edit_snapshot()
+        if not self._speed_edit_snapshots_differ(before, after):
+            return False
+        if not hasattr(self, "speed_edit_undo_stack"):
+            self.speed_edit_undo_stack = []
+        self.speed_edit_undo_stack.append(
+            {
+                "speed": np.asarray(before["speed"], dtype=np.float64).copy(),
+                "xyz": np.asarray(before["xyz"], dtype=np.float64).copy(),
+            }
+        )
+        self.speed_edit_undo_stack = self.speed_edit_undo_stack[-100:]
+        self.speed_edit_redo_stack = []
+        return True
+
+    def _finish_speed_canvas_edit_drag(self) -> bool:
+        before = getattr(self, "speed_edit_drag_snapshot", None)
+        self.speed_edit_drag_snapshot = None
+        if before is None:
+            return False
+        return self._record_speed_edit_snapshot(before)
+
+    def _undo_speed_edit(self) -> bool:
+        if not getattr(self, "speed_edit_active", False):
+            return False
+        if not getattr(self, "speed_edit_undo_stack", []):
+            return False
+        current = self._speed_edit_snapshot()
+        if current is None:
+            return False
+        target = self.speed_edit_undo_stack[-1]
+        if not self._apply_speed_edit_snapshot(target):
+            return False
+        self.speed_edit_undo_stack.pop()
+        if not hasattr(self, "speed_edit_redo_stack"):
+            self.speed_edit_redo_stack = []
+        self.speed_edit_redo_stack.append(current)
+        if hasattr(self, "_update_display"):
+            self._update_display()
+        return True
+
+    def _redo_speed_edit(self) -> bool:
+        if not getattr(self, "speed_edit_active", False):
+            return False
+        if not getattr(self, "speed_edit_redo_stack", []):
+            return False
+        current = self._speed_edit_snapshot()
+        if current is None:
+            return False
+        target = self.speed_edit_redo_stack[-1]
+        if not self._apply_speed_edit_snapshot(target):
+            return False
+        self.speed_edit_redo_stack.pop()
+        if not hasattr(self, "speed_edit_undo_stack"):
+            self.speed_edit_undo_stack = []
+        self.speed_edit_undo_stack.append(current)
+        if hasattr(self, "_update_display"):
+            self._update_display()
+        return True
+
+    def _speed_edit_local_radius(self, frame_count: int) -> int:
+        frame_count = max(0, int(frame_count))
+        if frame_count <= 1:
+            return 0
+        return int(min(frame_count - 1, SPEED_EDIT_LOCAL_RADIUS_FRAMES))
+
+    def _speed_edit_initial_speed_mps(self) -> Optional[float]:
+        try:
+            history_velocity = self._history_speed_mps_from_conv_data()
+        except Exception:
+            history_velocity = None
+        if history_velocity is not None and len(history_velocity):
+            value = float(history_velocity[-1])
+            if np.isfinite(value):
+                return value
+
+        try:
+            history_points = self._history_points_xyz(smoothed=False)
+        except Exception:
+            history_points = None
+        if history_points is not None and len(history_points) >= 2:
+            history_speed = _smoothed_history_speed_profile_from_xyz(history_points)
+            if len(history_speed):
+                value = float(history_speed[-1])
+                if np.isfinite(value):
+                    return value
+
+        estimator = getattr(self, "_estimate_t0_speed_mps", None)
+        if callable(estimator):
+            try:
+                value = float(estimator())
+            except Exception:
+                value = float("nan")
+            if np.isfinite(value):
+                return value
+        return None
+
+    def _postprocess_edited_speed_profile(self, speed: np.ndarray) -> np.ndarray:
+        smoothed = _smooth_speed_profile(
+            np.asarray(speed, dtype=np.float64),
+            passes=SPEED_EDIT_SMOOTH_PASSES,
+        )
+        initial_speed = self._speed_edit_initial_speed_mps()
+        if initial_speed is not None and np.isfinite(initial_speed):
+            speed_seed = np.concatenate([[float(initial_speed)], smoothed])
+            fixed_speed = np.full(len(speed_seed), np.nan, dtype=np.float64)
+            fixed_speed[0] = float(initial_speed)
+            limited_seed = _enforce_speed_acceleration_limits_with_fixed(
+                speed_seed,
+                fixed_speed,
+            )
+            return limited_seed[1:]
+        return _enforce_speed_acceleration_limits(smoothed)
 
     def _apply_speed_canvas_edit(self, event) -> None:
         if not self.speed_edit_active or self.speed_edit_speed is None:
@@ -561,7 +793,7 @@ class SpeedControlsMixin:
         new_speed = self._speed_canvas_value_from_y(event.y)
         editable = np.asarray(self.speed_edit_speed, dtype=np.float64).copy()
         center = int(frame_idx)
-        radius = min(SPEED_EDIT_LOCAL_RADIUS_FRAMES, max(len(editable) // 10, 2))
+        radius = self._speed_edit_local_radius(len(editable))
         start = max(0, center - radius)
         end = min(len(editable) - 1, center + radius)
         for idx in range(start, end + 1):
@@ -578,33 +810,89 @@ class SpeedControlsMixin:
                 weight = 0.35 * 0.5 * (1.0 + np.cos(np.pi * distance))
                 editable[idx] = editable[idx] * (1.0 - weight) + new_speed * weight
         self.speed_edit_last_frame = frame_idx
-        editable = _enforce_speed_acceleration_limits(editable)
+        editable = self._postprocess_edited_speed_profile(editable)
         self.speed_edit_speed = editable
         self.speed_edit_dirty = True
         self._apply_speed_edit_to_trajectory()
+        if self._speed_edit_is_for_active_geometry_edit():
+            self.traj_geom_edit_dirty = True
         self.speed_hover_source = "pred"
         self.speed_hover_frame_idx = frame_idx
         self._draw_trajectories()
         self._draw_speed_profile()
         self._draw_camera_images()
 
-    def _start_speed_edit(self) -> None:
+    def _speed_edit_is_for_active_geometry_edit(self) -> bool:
+        return (
+            bool(getattr(self, "traj_geom_edit_active", False))
+            and self.speed_edit_active
+            and self.speed_edit_traj_idx is not None
+            and getattr(self, "traj_geom_edit_traj_idx", None) is not None
+            and int(self.speed_edit_traj_idx) == int(self.traj_geom_edit_traj_idx)
+        )
+
+    def _reset_speed_edit_state(self) -> None:
+        self.speed_edit_active = False
+        self.speed_edit_dirty = False
+        self.speed_edit_traj_idx = None
+        self.speed_edit_original_traj = None
+        self.speed_edit_original_xyz = None
+        self.speed_edit_speed = None
+        self.speed_edit_last_frame = None
+        self.speed_edit_undo_stack = []
+        self.speed_edit_redo_stack = []
+        self.speed_edit_drag_snapshot = None
+        self._hide_pred_speed_actions()
+
+    def _sync_speed_edit_to_current_trajectory(self) -> None:
+        if not self._speed_edit_is_for_active_geometry_edit():
+            return
+        idx = int(self.speed_edit_traj_idx)
+        if not (0 <= idx < len(self.trajectories)):
+            self._reset_speed_edit_state()
+            return
+        traj = self.trajectories[idx]
+        self.speed_edit_original_traj = {
+            key: np.asarray(value).copy() if isinstance(value, np.ndarray) else value
+            for key, value in traj.items()
+        }
+        self.speed_edit_original_xyz = np.column_stack([traj["x"], traj["y"], traj["z"]]).copy()
+        self.speed_edit_speed = self._trajectory_speed_profile(traj).copy()
+        self.speed_edit_last_frame = None
+        self.speed_edit_undo_stack = []
+        self.speed_edit_redo_stack = []
+        self.speed_edit_drag_snapshot = None
+
+    def _start_speed_edit_for_canvas_interaction(self) -> bool:
+        if self.speed_edit_active:
+            return True
+        if not getattr(self, "traj_geom_edit_active", False):
+            return False
+        return bool(self._start_speed_edit(redraw=False))
+
+    def _start_speed_edit(self, redraw: bool = True) -> bool:
         if self.gt_only or not (0 <= self.current_traj_idx < len(self.trajectories)):
-            return
+            return False
         if getattr(self, "traj_geom_edit_active", False):
-            if hasattr(self, "root"):
-                messagebox.showwarning(
-                    "Trajectory Edit Active",
-                    "Save or cancel the current trajectory geometry edit before editing speed.",
-                )
-            return
+            if int(getattr(self, "traj_geom_edit_traj_idx", -1)) != int(self.current_traj_idx):
+                if hasattr(self, "root"):
+                    messagebox.showwarning(
+                        "Trajectory Edit Active",
+                        "Save or cancel the current trajectory geometry edit before editing another trajectory speed.",
+                    )
+                return False
+            if self.speed_edit_active:
+                return self._speed_edit_is_for_active_geometry_edit()
+        elif self.speed_edit_active:
+            self._cancel_speed_edit(redraw=False)
         if self._is_traj_pending_deleted(self.current_traj_idx):
-            return
-        self._cancel_speed_edit(redraw=False)
+            return False
         traj = self.trajectories[self.current_traj_idx]
         if self._is_gt_trajectory(traj, self.current_traj_idx):
             messagebox.showwarning("Keep GT", "Select a rule/manual trajectory; GT is optimized from the GT panel.")
-            return
+            return False
+        if not getattr(self, "traj_geom_edit_active", False):
+            self._cancel_speed_edit(redraw=False)
         self.speed_edit_active = True
         self.speed_edit_dirty = False
         self.speed_edit_traj_idx = int(self.current_traj_idx)
@@ -615,7 +903,12 @@ class SpeedControlsMixin:
         self.speed_edit_original_xyz = np.column_stack([traj["x"], traj["y"], traj["z"]]).copy()
         self.speed_edit_speed = self._trajectory_speed_profile(traj).copy()
         self.speed_edit_last_frame = None
-        self._update_display()
+        self.speed_edit_undo_stack = []
+        self.speed_edit_redo_stack = []
+        self.speed_edit_drag_snapshot = None
+        if redraw and hasattr(self, "_update_display"):
+            self._update_display()
+        return True
 
     def _cancel_speed_edit(self, redraw: bool = True) -> None:
         if self.speed_edit_active and self.speed_edit_original_traj is not None:
@@ -625,14 +918,13 @@ class SpeedControlsMixin:
                     key: np.asarray(value).copy() if isinstance(value, np.ndarray) else value
                     for key, value in self.speed_edit_original_traj.items()
                 }
-        self.speed_edit_active = False
-        self.speed_edit_dirty = False
-        self.speed_edit_traj_idx = None
-        self.speed_edit_original_traj = None
-        self.speed_edit_original_xyz = None
-        self.speed_edit_speed = None
-        self.speed_edit_last_frame = None
-        self._hide_pred_speed_actions()
+                if (
+                    getattr(self, "traj_geom_edit_active", False)
+                    and getattr(self, "traj_geom_edit_traj_idx", None) is not None
+                    and int(idx) == int(self.traj_geom_edit_traj_idx)
+                ):
+                    self.traj_geom_edit_dirty = True
+        self._reset_speed_edit_state()
         if redraw and hasattr(self, "root"):
             self._update_display()
 
@@ -658,9 +950,17 @@ class SpeedControlsMixin:
         )
         if sampled is None:
             return False
-        limited = _acceleration_limited_resample_path(sampled)
-        if limited is not None:
-            sampled = limited
+        endpoint = np.asarray(self.speed_edit_original_xyz, dtype=np.float64)[-1].copy()
+        initial_speed = self._speed_edit_initial_speed_mps()
+        limited = _acceleration_limited_resample_path(
+            sampled,
+            initial_speed_mps=initial_speed,
+            anchor_initial_speed=True,
+        )
+        if limited is None:
+            return False
+        sampled = limited
+        sampled[-1] = endpoint
         traj = self.trajectories[int(self.speed_edit_traj_idx)]
         self._apply_components_to_traj(traj, self._trajectory_components_from_xyz(sampled))
         self.speed_edit_speed = self._trajectory_speed_profile(traj)
@@ -673,6 +973,12 @@ class SpeedControlsMixin:
         if not self.speed_edit_dirty:
             self._cancel_speed_edit(redraw=True)
             return
+        if self._speed_edit_is_for_active_geometry_edit():
+            self.traj_geom_edit_dirty = True
+            self._reset_speed_edit_state()
+            if hasattr(self, "_update_display"):
+                self._update_display()
+            return
         edited_idx = int(self.speed_edit_traj_idx)
         edited_sample_idx = int(self.trajectories[edited_idx].get("sample_idx", edited_idx))
         if not self._write_selected_trajectory_to_parquet(edited_idx):
@@ -684,6 +990,9 @@ class SpeedControlsMixin:
         self.speed_edit_original_xyz = None
         self.speed_edit_speed = None
         self.speed_edit_last_frame = None
+        self.speed_edit_undo_stack = []
+        self.speed_edit_redo_stack = []
+        self.speed_edit_drag_snapshot = None
         self._hide_pred_speed_actions()
         self._load_sample(self.current_idx)
         for idx, traj in enumerate(self.trajectories):

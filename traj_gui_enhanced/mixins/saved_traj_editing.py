@@ -40,6 +40,8 @@ class SavedTrajectoryEditingMixin:
         self.traj_geom_edit_traj_idx = None
         self.traj_geom_edit_original_traj = None
         self.traj_geom_edit_original_xyz = None
+        self.traj_geom_edit_undo_stack = []
+        self.traj_geom_edit_redo_stack = []
 
     def _start_saved_trajectory_edit(self, redraw: bool = True) -> bool:
         if getattr(self, "traj_geom_edit_active", False):
@@ -75,6 +77,8 @@ class SavedTrajectoryEditingMixin:
         self.traj_geom_edit_dirty = False
         self.traj_geom_edit_traj_idx = traj_idx
         self.traj_geom_edit_original_xyz = xyz.copy()
+        self.traj_geom_edit_undo_stack = []
+        self.traj_geom_edit_redo_stack = []
         self.traj_geom_edit_original_traj = {
             key: np.asarray(value).copy() if isinstance(value, np.ndarray) else value
             for key, value in traj.items()
@@ -110,9 +114,109 @@ class SavedTrajectoryEditingMixin:
         components = trajectory_components_from_xyz(optimized.xyz)
         self._apply_components_to_saved_traj(int(traj_idx), components)
         self.traj_geom_edit_dirty = True
+        if hasattr(self, "_sync_speed_edit_to_current_trajectory"):
+            self._sync_speed_edit_to_current_trajectory()
         if hasattr(self, "_refresh_trajectory_smoothness"):
             self._refresh_trajectory_smoothness()
         return True
+
+    def _apply_saved_trajectory_edit_xyz_snapshot(self, xyz: np.ndarray) -> bool:
+        if (
+            not getattr(self, "traj_geom_edit_active", False)
+            or self.traj_geom_edit_traj_idx is None
+            or not (0 <= int(self.traj_geom_edit_traj_idx) < len(self.trajectories))
+        ):
+            return False
+        points = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+        components = trajectory_components_from_xyz(points)
+        self._apply_components_to_saved_traj(int(self.traj_geom_edit_traj_idx), components)
+        self.traj_geom_edit_dirty = True
+        if hasattr(self, "_sync_speed_edit_to_current_trajectory"):
+            self._sync_speed_edit_to_current_trajectory()
+        if hasattr(self, "_refresh_trajectory_smoothness"):
+            self._refresh_trajectory_smoothness()
+        return True
+
+    def _saved_trajectory_edit_snapshots_differ(
+        self,
+        before_xyz: np.ndarray | None,
+        after_xyz: np.ndarray | None,
+    ) -> bool:
+        if before_xyz is None or after_xyz is None:
+            return False
+        before = np.asarray(before_xyz, dtype=np.float64)
+        after = np.asarray(after_xyz, dtype=np.float64)
+        return before.shape == after.shape and not np.allclose(before, after, atol=1e-6)
+
+    def _record_saved_trajectory_edit_snapshot(
+        self,
+        before_xyz: np.ndarray | None,
+        after_xyz: np.ndarray | None = None,
+    ) -> bool:
+        if not getattr(self, "traj_geom_edit_active", False):
+            return False
+        if after_xyz is None:
+            after_xyz = self._selected_saved_traj_xyz()
+        if not self._saved_trajectory_edit_snapshots_differ(before_xyz, after_xyz):
+            return False
+        if not hasattr(self, "traj_geom_edit_undo_stack"):
+            self.traj_geom_edit_undo_stack = []
+        self.traj_geom_edit_undo_stack.append(np.asarray(before_xyz, dtype=np.float64).copy())
+        self.traj_geom_edit_undo_stack = self.traj_geom_edit_undo_stack[-100:]
+        self.traj_geom_edit_redo_stack = []
+        return True
+
+    def _undo_saved_trajectory_edit(self) -> bool:
+        if not getattr(self, "traj_geom_edit_active", False):
+            return False
+        if not getattr(self, "traj_geom_edit_undo_stack", []):
+            return False
+        current_xyz = self._selected_saved_traj_xyz()
+        if current_xyz is None:
+            return False
+        target_xyz = self.traj_geom_edit_undo_stack.pop()
+        if not hasattr(self, "traj_geom_edit_redo_stack"):
+            self.traj_geom_edit_redo_stack = []
+        self.traj_geom_edit_redo_stack.append(np.asarray(current_xyz, dtype=np.float64).copy())
+        if not self._apply_saved_trajectory_edit_xyz_snapshot(target_xyz):
+            return False
+        if hasattr(self, "_update_display"):
+            self._update_display()
+        return True
+
+    def _redo_saved_trajectory_edit(self) -> bool:
+        if not getattr(self, "traj_geom_edit_active", False):
+            return False
+        if not getattr(self, "traj_geom_edit_redo_stack", []):
+            return False
+        current_xyz = self._selected_saved_traj_xyz()
+        if current_xyz is None:
+            return False
+        target_xyz = self.traj_geom_edit_redo_stack.pop()
+        if not hasattr(self, "traj_geom_edit_undo_stack"):
+            self.traj_geom_edit_undo_stack = []
+        self.traj_geom_edit_undo_stack.append(np.asarray(current_xyz, dtype=np.float64).copy())
+        if not self._apply_saved_trajectory_edit_xyz_snapshot(target_xyz):
+            return False
+        if hasattr(self, "_update_display"):
+            self._update_display()
+        return True
+
+    def _on_undo_saved_trajectory_edit_key(self, _event=None):
+        undo_speed = getattr(self, "_undo_speed_edit", None)
+        if getattr(self, "speed_edit_active", False) and callable(undo_speed):
+            if undo_speed():
+                return "break"
+        self._undo_saved_trajectory_edit()
+        return "break"
+
+    def _on_redo_saved_trajectory_edit_key(self, _event=None):
+        redo_speed = getattr(self, "_redo_speed_edit", None)
+        if getattr(self, "speed_edit_active", False) and callable(redo_speed):
+            if redo_speed():
+                return "break"
+        self._redo_saved_trajectory_edit()
+        return "break"
 
     def _restore_saved_trajectory_edit(self, redraw: bool = True) -> None:
         if (
@@ -124,6 +228,8 @@ class SavedTrajectoryEditingMixin:
         components = trajectory_components_from_xyz(self.traj_geom_edit_original_xyz)
         self._apply_components_to_saved_traj(int(self.traj_geom_edit_traj_idx), components)
         self.traj_geom_edit_dirty = True
+        if hasattr(self, "_reset_speed_edit_state"):
+            self._reset_speed_edit_state()
         if redraw and hasattr(self, "_update_display"):
             self._update_display()
 
@@ -138,6 +244,8 @@ class SavedTrajectoryEditingMixin:
                 key: np.asarray(value).copy() if isinstance(value, np.ndarray) else value
                 for key, value in self.traj_geom_edit_original_traj.items()
             }
+        if hasattr(self, "_reset_speed_edit_state"):
+            self._reset_speed_edit_state()
         self._reset_saved_trajectory_edit_state()
         if hasattr(self, "_update_draw_cursor"):
             self._update_draw_cursor()
@@ -153,6 +261,8 @@ class SavedTrajectoryEditingMixin:
         traj_idx = int(self.traj_geom_edit_traj_idx)
         if not self._write_selected_trajectory_to_parquet(traj_idx):
             return
+        if hasattr(self, "_reset_speed_edit_state"):
+            self._reset_speed_edit_state()
         self._reset_saved_trajectory_edit_state()
         if hasattr(self, "_update_draw_cursor"):
             self._update_draw_cursor()
@@ -165,7 +275,7 @@ class SavedTrajectoryEditingMixin:
         xyz = self._selected_saved_traj_xyz()
         if xyz is None:
             return []
-        return editable_trajectory_keyframes(len(xyz), interval=8)
+        return editable_trajectory_keyframes(len(xyz), interval=16)
 
     def _nearest_saved_trajectory_keyframe_at_canvas(self, canvas_x: float, canvas_y: float):
         if not getattr(self, "traj_geom_edit_active", False):
@@ -194,6 +304,16 @@ class SavedTrajectoryEditingMixin:
             "base_xyz": self._selected_saved_traj_xyz(),
         }
         return True
+
+    def _finish_saved_trajectory_keyframe_drag(self) -> bool:
+        if not self.drag_state or self.drag_state.get("type") != "saved_traj_keyframe":
+            return False
+        if int(self.drag_state.get("traj_idx", -1)) != int(getattr(self, "traj_geom_edit_traj_idx", -2)):
+            return False
+        return self._record_saved_trajectory_edit_snapshot(
+            self.drag_state.get("base_xyz"),
+            self._selected_saved_traj_xyz(),
+        )
 
     def _drag_saved_trajectory_keyframe(self, canvas_x: float, canvas_y: float) -> bool:
         if not self.drag_state or self.drag_state.get("type") != "saved_traj_keyframe":

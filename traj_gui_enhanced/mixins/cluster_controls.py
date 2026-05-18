@@ -284,6 +284,13 @@ class ClusterControlsMixin:
             return f"{cluster_id}{suffix} right={final_right:.1f} fwd={final_forward:.1f}"
         return f"{cluster_id}{suffix} n={int(count)} right={final_right:.1f} fwd={final_forward:.1f}"
 
+    def _hide_cluster_preview(self) -> None:
+        """Hide the current unsaved cluster preview without touching saved trajectories."""
+        self.cluster_preview_record = None
+        self.cluster_preview_traj = None
+        self.cluster_preview_is_edited = False
+        self._update_display()
+
     def _save_selected_cluster_center_trajectory(self):
         if self.gt_only:
             messagebox.showwarning(

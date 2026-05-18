@@ -27,6 +27,7 @@ from ..projection_utils import *
 from ..cluster_utils import *
 
 class NavigationMixin:
+    SCENE_FILTER_NONE = "None"
 
     def _warn_pending_deletes_before_sample_change(self) -> bool:
         if hasattr(self, "_pending_delete_count") and self._pending_delete_count() > 0:
@@ -53,6 +54,7 @@ class NavigationMixin:
 
         dataset_name, clip_stem, t0_us = self.samples[self.current_idx]
         self.dataset_var.set(dataset_name)
+        self._sync_scene_filter_values(dataset_name)
         if self.clip_combo is not None:
             clips = self.clips_by_dataset.get(dataset_name, [])
             self.clip_combo.configure(values=clips)
@@ -66,6 +68,7 @@ class NavigationMixin:
 
     def _on_dataset_combo_selected(self, _event=None):
         dataset_name = self.dataset_var.get() if self.dataset_var is not None else ""
+        self._sync_scene_filter_values(dataset_name)
         clips = self.clips_by_dataset.get(dataset_name, [])
         if self.clip_combo is not None:
             self.clip_combo.configure(values=clips)
@@ -81,6 +84,89 @@ class NavigationMixin:
             self.t0_combo.configure(values=t0_values)
         if t0_values and self.t0_var is not None:
             self.t0_var.set(t0_values[0])
+
+    def _scene_filter_values_for_dataset(self, dataset_name: str) -> list[str]:
+        scenes = getattr(self, "scenes_by_dataset", {}).get(str(dataset_name), [])
+        return [self.SCENE_FILTER_NONE] + [str(scene) for scene in scenes]
+
+    def _current_scene_filter(self) -> str:
+        scene_filter_var = getattr(self, "scene_filter_var", None)
+        if scene_filter_var is not None:
+            value = scene_filter_var.get()
+        else:
+            value = getattr(self, "scene_filter_value", self.SCENE_FILTER_NONE)
+        value = str(value or self.SCENE_FILTER_NONE).strip()
+        return value or self.SCENE_FILTER_NONE
+
+    def _sync_scene_filter_values(self, dataset_name: str) -> None:
+        values = self._scene_filter_values_for_dataset(dataset_name)
+        current = self._current_scene_filter()
+        if current not in values:
+            current = self.SCENE_FILTER_NONE
+        self.scene_filter_value = current
+        scene_filter_combo = getattr(self, "scene_filter_combo", None)
+        if scene_filter_combo is not None:
+            scene_filter_combo.configure(values=values)
+        scene_filter_var = getattr(self, "scene_filter_var", None)
+        if scene_filter_var is not None:
+            scene_filter_var.set(current)
+
+    def _on_scene_filter_selected(self, _event=None) -> None:
+        self.scene_filter_value = self._current_scene_filter()
+        if self.scene_filter_value == self.SCENE_FILTER_NONE:
+            return
+        if not (0 <= int(self.current_idx) < len(self.samples)):
+            return
+        if not self._warn_pending_deletes_before_sample_change():
+            return
+        if not self._warn_active_traj_geometry_edit("changing samples"):
+            return
+        if getattr(self, "speed_edit_active", False):
+            messagebox.showwarning(
+                "Speed Edit Active",
+                "Save or discard the current speed adjustment before changing samples.",
+            )
+            return
+        dataset_name = self.samples[int(self.current_idx)][0]
+        target_idx = self._first_scene_sample_index(dataset_name, self.scene_filter_value)
+        if target_idx is None or int(target_idx) == int(self.current_idx):
+            return
+        self._load_sample(target_idx)
+        self._update_display()
+
+    def _sample_scene_label(self, idx: int) -> Optional[str]:
+        if not (0 <= int(idx) < len(self.samples)):
+            return None
+        dataset_name, clip_stem, t0_us = self.samples[int(idx)]
+        return getattr(self, "scene_label_by_sample", {}).get((dataset_name, clip_stem, int(t0_us)))
+
+    def _first_scene_sample_index(self, dataset_name: str, scene: str) -> Optional[int]:
+        scene = str(scene or "").strip()
+        if not scene or scene == self.SCENE_FILTER_NONE:
+            return None
+        for idx, (sample_dataset, _clip_stem, _t0_us) in enumerate(self.samples):
+            if sample_dataset == dataset_name and self._sample_scene_label(idx) == scene:
+                return idx
+        return None
+
+    def _scene_filtered_neighbor_index(self, direction: int) -> Optional[int]:
+        direction = 1 if int(direction) >= 0 else -1
+        next_idx = int(self.current_idx) + direction
+        scene = self._current_scene_filter()
+        if scene == self.SCENE_FILTER_NONE:
+            if 0 <= next_idx < len(self.samples):
+                return next_idx
+            return None
+        if not (0 <= int(self.current_idx) < len(self.samples)):
+            return None
+        current_dataset = self.samples[int(self.current_idx)][0]
+        idx = next_idx
+        while 0 <= idx < len(self.samples):
+            dataset_name, _clip_stem, _t0_us = self.samples[idx]
+            if dataset_name == current_dataset and self._sample_scene_label(idx) == scene:
+                return idx
+            idx += direction
+        return None
 
     def _jump_to_selected_sample(self):
         if not self._warn_pending_deletes_before_sample_change():
@@ -142,6 +228,28 @@ class NavigationMixin:
             self.current_traj_idx = traj_idx
             self._update_display()
 
+    def _trajectory_listbox_has_key_event(self, event) -> bool:
+        return getattr(event, "widget", None) is getattr(self, "traj_listbox", None)
+
+    def _bind_arrow_keys_for_trajectory_navigation(self, widget) -> None:
+        """Route Up/Down on focused dropdowns to trajectory navigation."""
+        if widget is None:
+            return
+        widget.bind("<Up>", self._on_global_prev_traj_key)
+        widget.bind("<Down>", self._on_global_next_traj_key)
+
+    def _on_global_prev_traj_key(self, event=None):
+        if self._trajectory_listbox_has_key_event(event):
+            return None
+        self._prev_traj()
+        return "break"
+
+    def _on_global_next_traj_key(self, event=None):
+        if self._trajectory_listbox_has_key_event(event):
+            return None
+        self._next_traj()
+        return "break"
+
     def _prev_sample(self):
         if not self._warn_pending_deletes_before_sample_change():
             return
@@ -153,8 +261,9 @@ class NavigationMixin:
                 "Save or discard the current speed adjustment before changing samples.",
             )
             return
-        if self.current_idx > 0:
-            self._load_sample(self.current_idx - 1)
+        target_idx = self._scene_filtered_neighbor_index(-1)
+        if target_idx is not None:
+            self._load_sample(target_idx)
             self._update_display()
 
     def _next_sample(self):
@@ -168,8 +277,9 @@ class NavigationMixin:
                 "Save or discard the current speed adjustment before changing samples.",
             )
             return
-        if self.current_idx < len(self.samples) - 1:
-            self._load_sample(self.current_idx + 1)
+        target_idx = self._scene_filtered_neighbor_index(1)
+        if target_idx is not None:
+            self._load_sample(target_idx)
             self._update_display()
 
     def _prev_traj(self):

@@ -95,8 +95,8 @@ class DrawCameraMixin:
     def _camera_display_height(self, cam_name):
         """Return display height in pixels, giving FC the most screen space."""
         if len(self.cameras) <= 3:
-            return 620 if cam_name == "FC" else 270
-        return 460 if cam_name == "FC" else 190
+            return 720 if cam_name == "FC" else 300
+        return 600 if cam_name == "FC" else 240
 
     def _draw_manual_camera_points(self, img, cam_name):
         """Draw editable Bezier control handles before display resizing."""
