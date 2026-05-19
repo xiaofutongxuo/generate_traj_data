@@ -296,7 +296,7 @@ class SpeedControlsMixin:
             return int(frame_idx) - max(history_len - 1, 0)
         return int(frame_idx)
 
-    def _speed_plot_geometry(self) -> dict[str, float]:
+    def _speed_plot_geometry(self, canvas=None) -> dict[str, float]:
         margin_left = 44
         margin_right = 14
         margin_top = 22
@@ -304,10 +304,12 @@ class SpeedControlsMixin:
         # Use actual rendered canvas size when available
         _w = 0
         _h = 0
-        if hasattr(self, "speed_canvas"):
+        if canvas is None:
+            canvas = getattr(self, "speed_canvas", None)
+        if canvas is not None:
             try:
-                _w = self.speed_canvas.winfo_width()
-                _h = self.speed_canvas.winfo_height()
+                _w = canvas.winfo_width()
+                _h = canvas.winfo_height()
             except Exception:
                 pass
         canvas_w = _w if _w > 10 else getattr(self, "speed_canvas_width", 560)
@@ -374,9 +376,9 @@ class SpeedControlsMixin:
 
     def _on_speed_canvas_motion(self, event, source: str) -> None:
         if source == "gt":
-            rect = self.gt_speed_plot_rect or self._speed_plot_geometry()
+            rect = self.gt_speed_plot_rect or self._speed_plot_geometry(getattr(self, "gt_speed_canvas", None))
         else:
-            rect = self.speed_plot_rect or self._speed_plot_geometry()
+            rect = self.speed_plot_rect or self._speed_plot_geometry(getattr(self, "speed_canvas", None))
         inside = (
             rect["left"] <= float(event.x) <= rect["right"]
             and rect["top"] <= float(event.y) <= rect["bottom"]
@@ -389,7 +391,7 @@ class SpeedControlsMixin:
         self._set_speed_hover_frame(hover_source or source, frame_idx)
 
     def _speed_canvas_frame_from_x(self, x: float) -> Optional[int]:
-        rect = self.speed_plot_rect or self._speed_plot_geometry()
+        rect = self.speed_plot_rect or self._speed_plot_geometry(getattr(self, "speed_canvas", None))
         if not (rect["left"] <= float(x) <= rect["right"]):
             return None
         hover_source, frame_idx = self._speed_hover_target_for_canvas_x("pred", x, rect)
@@ -398,7 +400,7 @@ class SpeedControlsMixin:
         return frame_idx
 
     def _speed_canvas_value_from_y(self, y: float) -> float:
-        rect = self.speed_plot_rect or self._speed_plot_geometry()
+        rect = self.speed_plot_rect or self._speed_plot_geometry(getattr(self, "speed_canvas", None))
         _label, speed, _stops, _color = self._selected_speed_profile_source()
         _history_label, history_speed, _history_stops, _history_color = (
             self._history_speed_profile_source()
@@ -528,7 +530,7 @@ class SpeedControlsMixin:
     def _on_gt_speed_canvas_click(self, event) -> None:
         if not self.gt_edit_active or self.gt_edit_mode != "stop":
             return
-        rect = self.gt_speed_plot_rect or self._speed_plot_geometry()
+        rect = self.gt_speed_plot_rect or self._speed_plot_geometry(getattr(self, "gt_speed_canvas", None))
         if not (
             rect["left"] <= float(event.x) <= rect["right"]
             and rect["top"] <= float(event.y) <= rect["bottom"]

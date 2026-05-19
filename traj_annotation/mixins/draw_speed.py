@@ -39,7 +39,7 @@ class DrawSpeedMixin:
         _ch = canvas.winfo_height()
         width = _cw if _cw > 10 else self.speed_canvas_width
         height = _ch if _ch > 10 else self.speed_canvas_height
-        rect = self._speed_plot_geometry()
+        rect = self._speed_plot_geometry(canvas)
         if source == "gt":
             self.gt_speed_plot_rect = rect
         else:

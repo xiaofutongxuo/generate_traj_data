@@ -190,6 +190,18 @@ class WidgetLayoutMixin:
         self.traj_canvas.bind("<Motion>", self._on_traj_canvas_motion)
         self.traj_canvas.bind("<Leave>", lambda _event: self._hide_stop_tooltip())
 
+        def _on_bev_configure(event):
+            if event.width > 10 and event.height > 10:
+                self.bev_canvas_width = event.width
+                self.bev_canvas_height = event.height
+                bottom_margin = getattr(getattr(self, "responsive_layout", None), "bev_origin_bottom_margin", 65)
+                self.bev_origin = (event.width / 2, event.height - bottom_margin)
+                if hasattr(self, '_bev_resize_timer'):
+                    self.root.after_cancel(self._bev_resize_timer)
+                self._bev_resize_timer = self.root.after(30, lambda: self._draw_trajectories() if hasattr(self, 'trajectories') and self.trajectories else None)
+
+        self.traj_canvas.bind("<Configure>", _on_bev_configure)
+
         # Pane 2: Pred Speed
         pred_frame = tk.Frame(left_paned, bg=BG_PANEL)
         left_paned.add(pred_frame, weight=3)
@@ -209,6 +221,16 @@ class WidgetLayoutMixin:
         self.speed_canvas.bind("<Button-1>", self._on_speed_canvas_left_down)
         self.speed_canvas.bind("<B1-Motion>", self._on_speed_canvas_left_drag)
         self.speed_canvas.bind("<ButtonRelease-1>", self._on_speed_canvas_left_release)
+
+        def _on_speed_configure(event):
+            if event.width > 10 and event.height > 10:
+                self.speed_canvas_width = event.width
+                self.speed_canvas_height = event.height
+                if hasattr(self, '_speed_resize_timer'):
+                    self.root.after_cancel(self._speed_resize_timer)
+                self._speed_resize_timer = self.root.after(30, lambda: self._draw_speed_profile() if hasattr(self, 'trajectories') and getattr(self, 'trajectories', None) else None)
+
+        self.speed_canvas.bind("<Configure>", _on_speed_configure)
 
         self.pred_speed_action_frame = tk.Frame(pred_frame, bg=BG_PANEL)
         FlatButton(self.pred_speed_action_frame, "接受", self._save_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
@@ -232,6 +254,14 @@ class WidgetLayoutMixin:
         self.gt_speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "gt"))
         self.gt_speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("gt", None))
         self.gt_speed_canvas.bind("<Button-1>", self._on_gt_speed_canvas_click)
+
+        def _on_gt_speed_configure(event):
+            if event.width > 10 and event.height > 10:
+                if hasattr(self, '_gt_speed_resize_timer'):
+                    self.root.after_cancel(self._gt_speed_resize_timer)
+                self._gt_speed_resize_timer = self.root.after(30, lambda: self._draw_gt_speed_profile() if hasattr(self, 'trajectories') and getattr(self, 'trajectories', None) else None)
+
+        self.gt_speed_canvas.bind("<Configure>", _on_gt_speed_configure)
 
         self.gt_speed_action_frame = tk.Frame(gt_frame, bg=BG_PANEL)
         FlatButton(self.gt_speed_action_frame, "接受", self._save_gt_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
