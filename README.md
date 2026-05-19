@@ -128,7 +128,7 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 
 /home/ubuntu/Public/hzq/generate_traj_data/.venv/bin/python trajectory_annotator.py \
   --data_root /home/ubuntu/Public/train_data \
-  --output_dir /home/ubuntu/Public/hzq/generate_traj_data/output \
+  --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output \
   --index_mode video_frames \
   --frame_stride 5 \
   --cameras RL,FC,RR \
