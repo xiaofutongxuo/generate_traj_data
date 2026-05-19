@@ -31,6 +31,7 @@ class ResponsiveLayout:
     clip_combo_width: int
     t0_combo_width: int
     scene_combo_width: int
+    middle_panel_width: int
 
 
 def clamp_int(value: float, minimum: int, maximum: int) -> int:
@@ -88,6 +89,9 @@ def compute_responsive_layout(screen_width: int, screen_height: int) -> Responsi
     t0_combo_width = 18 if compact else 22
     scene_combo_width = 15 if compact else 18
 
+    # Estimate the middle panel width (window width minus left panel minus right panel minus padding)
+    middle_panel_width = clamp_int(window_width - bev_canvas_width - right_panel_width - 100, 300, 1500)
+
     start_maximized = True  # Always launch maximized for full-screen responsive layout
 
     return ResponsiveLayout(
@@ -115,4 +119,5 @@ def compute_responsive_layout(screen_width: int, screen_height: int) -> Responsi
         clip_combo_width=clip_combo_width,
         t0_combo_width=t0_combo_width,
         scene_combo_width=scene_combo_width,
+        middle_panel_width=middle_panel_width,
     )

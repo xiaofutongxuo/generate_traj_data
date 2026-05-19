@@ -50,18 +50,27 @@ class DrawCameraMixin:
                 cam_frame_rgb = self._draw_traffic_participants_on_image(cam_frame_rgb, cam)
                 cam_frame_rgb = self._draw_manual_camera_points(cam_frame_rgb, cam)
 
-                # Resize for display
+                # Resize for display based on frame size from layout manager
                 h, w = cam_frame_rgb.shape[:2]
                 
-                new_h = self._camera_display_height(cam)
-                new_w = max(1, int(new_h * w / h))
+                meta = self.camera_display_meta.get(cam, {})
+                target_w = meta.get("target_width", 300)
+                target_h = meta.get("target_height", 200)
 
-                self.camera_display_meta[cam] = {
+                if target_w < 10 or target_h < 10:
+                    continue
+                
+                scale = min(target_w / max(1, w), target_h / max(1, h))
+                new_w = max(1, int(w * scale))
+                new_h = max(1, int(h * scale))
+
+                self.camera_display_meta[cam].update({
                     "source_width": w,
                     "source_height": h,
                     "display_width": new_w,
                     "display_height": new_h,
-                }
+                })
+                
                 cam_frame_rgb = cv2.resize(cam_frame_rgb, (new_w, new_h))
 
                 # Convert to PhotoImage
@@ -96,15 +105,7 @@ class DrawCameraMixin:
         self.camera_base_images[cam] = cam_frame_rgb
         return cam_frame_rgb.copy()
 
-    def _camera_display_height(self, cam_name):
-        """Return display height in pixels, giving FC the most screen space."""
-        if len(self.cameras) <= 3:
-            if cam_name == "FC":
-                return getattr(self, "camera_fc_display_height", 720)
-            return getattr(self, "camera_aux_display_height", 300)
-        if cam_name == "FC":
-            return getattr(self, "camera_fc_display_height_many", 600)
-        return getattr(self, "camera_aux_display_height_many", 240)
+
 
     def _draw_manual_camera_points(self, img, cam_name):
         """Draw editable Bezier control handles before display resizing."""

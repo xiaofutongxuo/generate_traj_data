@@ -100,6 +100,7 @@ class TrajectoryViewerEnhanced(
         self.clip_combo_width = 24
         self.t0_combo_width = 22
         self.scene_combo_width = 18
+        self.middle_panel_width = 800
         self.stop_marker_hitboxes = []
         self.stop_tooltip_items = []
         self.speed_hover_frame_idx = None
@@ -350,6 +351,7 @@ class TrajectoryViewerEnhanced(
         self.clip_combo_width = layout.clip_combo_width
         self.t0_combo_width = layout.t0_combo_width
         self.scene_combo_width = layout.scene_combo_width
+        self.middle_panel_width = layout.middle_panel_width
 
     def _try_maximize_root(self) -> None:
         if getattr(self, "_closing", False):

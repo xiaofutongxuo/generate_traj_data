@@ -26,6 +26,21 @@ from traj_core.speed_utils import *
 from ..projection_utils import *
 from traj_core.cluster_utils import *
 
+# Color Palette constants
+BG_MAIN = "#1E1E1E"
+BG_PANEL = "#252526"
+BG_HEADER = "#333333"
+FG_PRIMARY = "#FFFFFF"
+FG_SECONDARY = "#CCCCCC"
+
+def FlatButton(parent, text, command, bg, fg="white", **kwargs):
+    """Helper for modern flat buttons."""
+    return tk.Button(
+        parent, text=text, command=command, bg=bg, fg=fg,
+        activebackground=bg, activeforeground="white",
+        relief=tk.FLAT, borderwidth=0, cursor="hand2", **kwargs
+    )
+
 class WidgetLayoutMixin:
 
     def _create_scrollable_main_frame(self, bg_color: str):
@@ -40,29 +55,28 @@ class WidgetLayoutMixin:
         self.main_scroll_frame = main_frame
         return main_frame
 
-
-
     def _create_widgets(self):
-        """Create GUI widgets with a modern dark theme."""
+        """Create GUI widgets with a modern dark theme, using modularized builders."""
         # Style configuration
-        style = ttk.Style()
-        if 'clam' in style.theme_names():
-            style.theme_use('clam')
+        self.style = ttk.Style()
+        if 'clam' in self.style.theme_names():
+            self.style.theme_use('clam')
+        self.style.configure("Dark.TLabelframe", background=BG_PANEL, foreground=FG_PRIMARY)
+        self.style.configure("Dark.TLabelframe.Label", background=BG_PANEL, foreground=FG_PRIMARY, font=("Segoe UI", 10, "bold"))
 
-        # Color Palette
-        BG_MAIN = "#1E1E1E"
-        BG_PANEL = "#252526"
-        BG_HEADER = "#333333"
-        FG_PRIMARY = "#FFFFFF"
-        FG_SECONDARY = "#CCCCCC"
-
-        # Configure global window background
         self.root.configure(bg=BG_MAIN)
+        self.main_frame = self._create_scrollable_main_frame(BG_MAIN)
 
-        main_frame = self._create_scrollable_main_frame(BG_MAIN)
+        self._build_header_panel(self.main_frame)
+        self._build_center_workspace(self.main_frame)
+        self._build_bottom_controls(self.main_frame)
+        self._build_footer_panel(self.main_frame)
 
-        # --- Top Header Bar ---
-        header_frame = tk.Frame(main_frame, bg=BG_PANEL, relief=tk.FLAT, bd=0)
+        # Bind a single resize handler on the root window.
+        self.root.bind("<Configure>", self._on_window_configure, add="+")
+
+    def _build_header_panel(self, parent):
+        header_frame = tk.Frame(parent, bg=BG_PANEL, relief=tk.FLAT, bd=0)
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         title_frame = tk.Frame(header_frame, bg=BG_PANEL)
@@ -83,22 +97,11 @@ class WidgetLayoutMixin:
         jump_frame = tk.Frame(header_frame, bg=BG_PANEL)
         jump_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
 
-        # Helper for modern flat buttons
-        def FlatButton(parent, text, command, bg, fg="white", **kwargs):
-            return tk.Button(
-                parent, text=text, command=command, bg=bg, fg=fg,
-                activebackground=bg, activeforeground="white",
-                relief=tk.FLAT, borderwidth=0, cursor="hand2", **kwargs
-            )
-
         tk.Label(jump_frame, text="Dataset", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.dataset_var = tk.StringVar()
         self.dataset_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.dataset_var,
-            values=self.datasets,
-            state="readonly",
-            width=getattr(self, "dataset_combo_width", 30),
+            jump_frame, textvariable=self.dataset_var, values=self.datasets,
+            state="readonly", width=getattr(self, "dataset_combo_width", 30),
         )
         self.dataset_combo.pack(side=tk.LEFT, padx=(0, 12))
         self.dataset_combo.bind("<<ComboboxSelected>>", self._on_dataset_combo_selected)
@@ -107,9 +110,7 @@ class WidgetLayoutMixin:
         tk.Label(jump_frame, text="Clip", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.clip_var = tk.StringVar()
         self.clip_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.clip_var,
-            state="readonly",
+            jump_frame, textvariable=self.clip_var, state="readonly",
             width=getattr(self, "clip_combo_width", 24),
         )
         self.clip_combo.pack(side=tk.LEFT, padx=(0, 12))
@@ -119,9 +120,7 @@ class WidgetLayoutMixin:
         tk.Label(jump_frame, text="t0", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.t0_var = tk.StringVar()
         self.t0_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.t0_var,
-            state="readonly",
+            jump_frame, textvariable=self.t0_var, state="readonly",
             width=getattr(self, "t0_combo_width", 22),
         )
         self.t0_combo.pack(side=tk.LEFT, padx=(0, 16))
@@ -130,9 +129,7 @@ class WidgetLayoutMixin:
         tk.Label(jump_frame, text="Scene", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 4))
         self.scene_filter_var = tk.StringVar(value=getattr(self, "scene_filter_value", "None"))
         self.scene_filter_combo = ttk.Combobox(
-            jump_frame,
-            textvariable=self.scene_filter_var,
-            state="readonly",
+            jump_frame, textvariable=self.scene_filter_var, state="readonly",
             width=getattr(self, "scene_combo_width", 18),
         )
         self.scene_filter_combo.pack(side=tk.LEFT, padx=(0, 16))
@@ -142,45 +139,48 @@ class WidgetLayoutMixin:
         FlatButton(jump_frame, "Jump", self._jump_to_selected_sample, bg="#2196F3", padx=16, pady=4).pack(side=tk.LEFT, padx=(0, 8))
         FlatButton(jump_frame, "Current", self._sync_sample_selectors, bg="#607D8B", padx=16, pady=4).pack(side=tk.LEFT)
 
-        # --- Content Area ---
-        content_frame = tk.Frame(main_frame, bg=BG_MAIN)
+    def _build_center_workspace(self, parent):
+        content_frame = tk.Frame(parent, bg=BG_MAIN)
         content_frame.grid(row=1, column=0, sticky="nsew")
 
         horizontal_paned = ttk.PanedWindow(content_frame, orient=tk.HORIZONTAL)
         horizontal_paned.pack(fill=tk.BOTH, expand=True)
 
-        # 1. Left panel - Bird's eye view & Speeds
-        left_frame = tk.Frame(horizontal_paned, bg=BG_PANEL)
-        horizontal_paned.add(left_frame, weight=3)
+        self._build_left_panel(horizontal_paned)
+        self._build_middle_panel(horizontal_paned)
+        self._build_right_panel(horizontal_paned)
 
-        bev_header = tk.Frame(left_frame, bg=BG_PANEL)
-        bev_header.pack(fill=tk.X, padx=10, pady=(10, 5))
+    def _build_left_panel(self, paned_window):
+        left_outer_frame = tk.Frame(paned_window, bg=BG_PANEL)
+        paned_window.add(left_outer_frame, weight=0)  # Weight 0 so it wraps tightly to canvas width
+
+        left_paned = ttk.PanedWindow(left_outer_frame, orient=tk.VERTICAL)
+        left_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
+
+        # Pane 1: BEV
+        bev_frame = tk.Frame(left_paned, bg=BG_PANEL)
+        left_paned.add(bev_frame, weight=3)
+
+        bev_header = tk.Frame(bev_frame, bg=BG_PANEL)
+        bev_header.pack(fill=tk.X, pady=(0, 5))
         tk.Label(
-            bev_header,
-            text="Bird's Eye View",
-            font=("Segoe UI", 12, "bold"),
-            fg=FG_PRIMARY,
-            bg=BG_PANEL,
+            bev_header, text="Bird's Eye View",
+            font=("Segoe UI", 12, "bold"), fg=FG_PRIMARY, bg=BG_PANEL,
         ).pack(side=tk.LEFT)
+        
         self.show_objects_var = tk.BooleanVar(value=bool(getattr(self, "show_objects_enabled", True)))
         tk.Checkbutton(
-            bev_header,
-            text="交通参与者",
-            variable=self.show_objects_var,
-            command=self._toggle_object_overlay,
-            bg=BG_PANEL,
-            fg=FG_SECONDARY,
-            selectcolor=BG_MAIN,
-            activebackground=BG_PANEL,
-            activeforeground=FG_PRIMARY,
+            bev_header, text="交通参与者", variable=self.show_objects_var,
+            command=self._toggle_object_overlay, bg=BG_PANEL, fg=FG_SECONDARY,
+            selectcolor=BG_MAIN, activebackground=BG_PANEL, activeforeground=FG_PRIMARY,
             font=("Segoe UI", 9),
         ).pack(side=tk.RIGHT)
 
         self.traj_canvas = tk.Canvas(
-            left_frame, width=self.bev_canvas_width, height=self.bev_canvas_height,
+            bev_frame, width=self.bev_canvas_width, height=self.bev_canvas_height,
             bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.traj_canvas.pack(padx=10, pady=(0, 10), fill=tk.BOTH, expand=True)
+        self.traj_canvas.pack(fill=tk.BOTH, expand=True)
         self.traj_canvas.bind("<Button-1>", self._on_canvas_click)
         self.traj_canvas.bind("<B1-Motion>", self._on_canvas_left_drag)
         self.traj_canvas.bind("<ButtonRelease-1>", self._on_left_release)
@@ -190,56 +190,62 @@ class WidgetLayoutMixin:
         self.traj_canvas.bind("<Motion>", self._on_traj_canvas_motion)
         self.traj_canvas.bind("<Leave>", lambda _event: self._hide_stop_tooltip())
 
-        # Speed Profiles
-        ttk.Separator(left_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
+        # Pane 2: Pred Speed
+        pred_frame = tk.Frame(left_paned, bg=BG_PANEL)
+        left_paned.add(pred_frame, weight=1)
 
-        pred_speed_header = tk.Frame(left_frame, bg=BG_PANEL)
-        pred_speed_header.pack(fill=tk.X, padx=10, pady=(5, 2))
+        pred_speed_header = tk.Frame(pred_frame, bg=BG_PANEL)
+        pred_speed_header.pack(fill=tk.X, pady=(5, 2))
         tk.Label(pred_speed_header, text="Diversity Speed Profile", font=("Segoe UI", 11, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(side=tk.LEFT)
         FlatButton(pred_speed_header, "优化速度曲线", self._optimize_pred_speed_curve, bg="#34495e", padx=10, pady=2).pack(side=tk.RIGHT)
 
         self.speed_canvas = tk.Canvas(
-            left_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
+            pred_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
             bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.speed_canvas.pack(padx=10, pady=(0, 5), fill=tk.BOTH, expand=False)
+        self.speed_canvas.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
         self.speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "pred"))
         self.speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("pred", None))
         self.speed_canvas.bind("<Button-1>", self._on_speed_canvas_left_down)
         self.speed_canvas.bind("<B1-Motion>", self._on_speed_canvas_left_drag)
         self.speed_canvas.bind("<ButtonRelease-1>", self._on_speed_canvas_left_release)
 
-        self.pred_speed_action_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        self.pred_speed_action_frame = tk.Frame(pred_frame, bg=BG_PANEL)
         FlatButton(self.pred_speed_action_frame, "接受", self._save_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
         FlatButton(self.pred_speed_action_frame, "取消", lambda: self._cancel_speed_edit(redraw=True), bg="#F44336", padx=16).pack(side=tk.LEFT)
 
-        gt_speed_header_frame = tk.Frame(left_frame, bg=BG_PANEL)
-        gt_speed_header_frame.pack(fill=tk.X, padx=10, pady=(10, 2))
+        # Pane 3: GT Speed
+        gt_frame = tk.Frame(left_paned, bg=BG_PANEL)
+        left_paned.add(gt_frame, weight=1)
+
+        gt_speed_header_frame = tk.Frame(gt_frame, bg=BG_PANEL)
+        gt_speed_header_frame.pack(fill=tk.X, pady=(5, 2))
         tk.Label(gt_speed_header_frame, text="GT Speed Profile", font=("Segoe UI", 11, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(side=tk.LEFT)
         FlatButton(gt_speed_header_frame, "优化速度曲线", self._optimize_gt_speed_curve, bg="#5d6d7e", padx=10, pady=2).pack(side=tk.RIGHT)
         FlatButton(gt_speed_header_frame, "停车添加", self._start_gt_stop_add, bg="#D32F2F", padx=10, pady=2).pack(side=tk.RIGHT, padx=(0, 5))
 
         self.gt_speed_canvas = tk.Canvas(
-            left_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
+            gt_frame, width=self.speed_canvas_width, height=self.speed_canvas_height,
             bg="#121212", highlightthickness=1, highlightbackground="#333333",
         )
-        self.gt_speed_canvas.pack(padx=10, pady=(0, 5), fill=tk.BOTH, expand=False)
+        self.gt_speed_canvas.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
         self.gt_speed_canvas.bind("<Motion>", lambda event: self._on_speed_canvas_motion(event, "gt"))
         self.gt_speed_canvas.bind("<Leave>", lambda _event: self._set_speed_hover_frame("gt", None))
         self.gt_speed_canvas.bind("<Button-1>", self._on_gt_speed_canvas_click)
 
-        self.gt_speed_action_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        self.gt_speed_action_frame = tk.Frame(gt_frame, bg=BG_PANEL)
         FlatButton(self.gt_speed_action_frame, "接受", self._save_gt_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
         FlatButton(self.gt_speed_action_frame, "取消", lambda: self._cancel_gt_speed_edit(redraw=True), bg="#F44336", padx=16).pack(side=tk.LEFT)
 
-        self.gt_stop_action_frame = tk.Frame(left_frame, bg=BG_PANEL)
+        self.gt_stop_action_frame = tk.Frame(gt_frame, bg=BG_PANEL)
         FlatButton(self.gt_stop_action_frame, "保存", self._save_gt_speed_edit, bg="#4CAF50", padx=16).pack(side=tk.LEFT, padx=(0, 5))
         FlatButton(self.gt_stop_action_frame, "取消", lambda: self._cancel_gt_speed_edit(redraw=True), bg="#F44336", padx=16).pack(side=tk.LEFT, padx=(0, 5))
         FlatButton(self.gt_stop_action_frame, "撤回", self._undo_gt_stop_add, bg="#FF9800", padx=16).pack(side=tk.LEFT)
 
-        # 2. Middle panel - Camera images with projection
-        middle_frame = tk.Frame(horizontal_paned, bg=BG_PANEL)
-        horizontal_paned.add(middle_frame, weight=5)
+    def _build_middle_panel(self, paned_window):
+        middle_frame = tk.Frame(paned_window, bg=BG_PANEL)
+        self.middle_frame = middle_frame
+        paned_window.add(middle_frame, weight=1)
 
         cam_select_frame = tk.Frame(middle_frame, bg=BG_PANEL)
         cam_select_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -256,52 +262,65 @@ class WidgetLayoutMixin:
             ).pack(side=tk.LEFT, padx=4)
 
         self.camera_labels = {}
+        self.camera_frames = {}
 
-        def create_camera_panel(parent, cam, side=tk.TOP, expand=False):
+        def create_camera_panel(parent, cam, row, col, rowspan=1, colspan=1):
             cam_frame = tk.Frame(parent, bg=BG_MAIN, highlightthickness=1, highlightbackground="#333333")
-            cam_frame.pack(side=side, expand=expand, fill=tk.BOTH, padx=4, pady=4)
-            tk.Label(cam_frame, text=cam, font=("Segoe UI", 10, "bold"), fg=FG_PRIMARY, bg=BG_HEADER).pack(fill=tk.X)
-            self.camera_labels[cam] = tk.Label(cam_frame, bg=BG_MAIN)
-            self.camera_labels[cam].pack(expand=True, fill=tk.BOTH)
-            self.camera_labels[cam].bind("<Button-1>", lambda event, camera=cam: self._on_camera_click(event, camera))
-            self.camera_labels[cam].bind("<Button-3>", lambda event, camera=cam: self._on_camera_right_down(event, camera))
-            self.camera_labels[cam].bind("<B3-Motion>", lambda event, camera=cam: self._on_camera_right_drag(event, camera))
-            self.camera_labels[cam].bind("<ButtonRelease-3>", self._on_right_release)
+            cam_frame.grid(row=row, column=col, rowspan=rowspan, columnspan=colspan, sticky="nsew", padx=4, pady=4)
+            cam_frame.grid_propagate(False)
 
-        top_camera_row = tk.Frame(middle_frame, bg=BG_PANEL)
-        top_camera_row.pack(fill=tk.X, padx=6)
-        main_camera_area = tk.Frame(middle_frame, bg=BG_PANEL)
-        main_camera_area.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+            cam_frame.grid_rowconfigure(1, weight=1)
+            cam_frame.grid_columnconfigure(0, weight=1)
+
+            tk.Label(cam_frame, text=cam, font=("Segoe UI", 10, "bold"), fg=FG_PRIMARY, bg=BG_HEADER).grid(row=0, column=0, sticky="ew")
+            
+            label = tk.Label(cam_frame, bg=BG_MAIN)
+            label.grid(row=1, column=0, sticky="nsew")
+            
+            self.camera_labels[cam] = label
+            self.camera_frames[cam] = cam_frame
+
+            label.bind("<Button-1>", lambda event, camera=cam: self._on_camera_click(event, camera))
+            label.bind("<Button-3>", lambda event, camera=cam: self._on_camera_right_down(event, camera))
+            label.bind("<B3-Motion>", lambda event, camera=cam: self._on_camera_right_drag(event, camera))
+            label.bind("<ButtonRelease-3>", self._on_right_release)
+
+            cam_frame.bind("<Configure>", lambda e, c=cam: self._on_camera_frame_configure(e, c))
+
+        cameras_container = tk.Frame(middle_frame, bg=BG_PANEL)
+        cameras_container.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+        cameras_container.grid_rowconfigure(0, weight=1)
+        cameras_container.grid_rowconfigure(1, weight=2)
 
         top_cameras = [cam for cam in ("RL", "RR") if cam in self.cameras]
         remaining_top_cameras = [cam for cam in self.cameras if cam not in top_cameras and cam != "FC"]
         top_cameras.extend(remaining_top_cameras)
+        num_top_cams = max(1, len(top_cameras))
 
-        for cam in top_cameras:
-            create_camera_panel(top_camera_row, cam, side=tk.LEFT, expand=True)
+        for i in range(num_top_cams):
+            cameras_container.grid_columnconfigure(i, weight=1)
+
+        for idx, cam in enumerate(top_cameras):
+            create_camera_panel(cameras_container, cam, row=0, col=idx)
 
         if "FC" in self.cameras:
-            create_camera_panel(main_camera_area, "FC", side=tk.TOP, expand=True)
+            create_camera_panel(cameras_container, "FC", row=1, col=0, colspan=num_top_cams)
 
-        # 3. Right panel - Trajectory list, CoT, Clusters using PanedWindow
+    def _build_right_panel(self, paned_window):
         right_frame = tk.Frame(
-            horizontal_paned,
-            bg=BG_PANEL,
+            paned_window, bg=BG_PANEL,
             width=getattr(self, "right_panel_width", 460),
         )
-        horizontal_paned.add(right_frame, weight=2)
+        paned_window.add(right_frame, weight=0)
         right_frame.pack_propagate(False)
 
-        style.configure("Dark.TLabelframe", background=BG_PANEL, foreground=FG_PRIMARY)
-        style.configure("Dark.TLabelframe.Label", background=BG_PANEL, foreground=FG_PRIMARY, font=("Segoe UI", 10, "bold"))
-
-        # We use a TPanedwindow to allow resizing sections
-        paned_window = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
-        paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
+        vertical_paned = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
+        vertical_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
 
         # Pane 1: Trajectories
-        traj_pane = ttk.LabelFrame(paned_window, text="Trajectories", style="Dark.TLabelframe")
-        paned_window.add(traj_pane, weight=3)
+        traj_pane = ttk.LabelFrame(vertical_paned, text="Trajectories", style="Dark.TLabelframe")
+        vertical_paned.add(traj_pane, weight=3)
 
         list_frame = tk.Frame(traj_pane, bg=BG_PANEL)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -322,8 +341,8 @@ class WidgetLayoutMixin:
         self.traj_listbox.bind("<Leave>", lambda _event: self._hide_traj_list_tooltip())
 
         # Pane 2: Chain of Thought
-        cot_pane = ttk.LabelFrame(paned_window, text="Chain of Thought", style="Dark.TLabelframe")
-        paned_window.add(cot_pane, weight=2)
+        cot_pane = ttk.LabelFrame(vertical_paned, text="Chain of Thought", style="Dark.TLabelframe")
+        vertical_paned.add(cot_pane, weight=2)
 
         self.cot_text = tk.Text(
             cot_pane, height=8, width=42, wrap=tk.WORD,
@@ -334,8 +353,8 @@ class WidgetLayoutMixin:
         self.cot_text.configure(state=tk.DISABLED)
 
         # Pane 3: Cluster Centers
-        cluster_pane = ttk.LabelFrame(paned_window, text="Cluster Centers", style="Dark.TLabelframe")
-        paned_window.add(cluster_pane, weight=0)
+        cluster_pane = ttk.LabelFrame(vertical_paned, text="Cluster Centers", style="Dark.TLabelframe")
+        vertical_paned.add(cluster_pane, weight=0)
 
         cluster_inner = tk.Frame(cluster_pane, bg=BG_PANEL)
         cluster_inner.pack(fill=tk.X, padx=8, pady=8)
@@ -363,10 +382,11 @@ class WidgetLayoutMixin:
         FlatButton(cluster_button_frame, "Hide", self._hide_cluster_preview, bg="#607D8B", padx=14).pack(side=tk.LEFT)
         self._refresh_cluster_choice_values()
 
-        # --- Bottom Control Panels ---
-        controls_outer_frame = tk.Frame(main_frame, bg=BG_MAIN)
+    def _build_bottom_controls(self, parent):
+        controls_outer_frame = tk.Frame(parent, bg=BG_MAIN)
         controls_outer_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         controls_outer_frame.grid_columnconfigure(0, weight=1)
+        
         compact_controls = bool(
             getattr(getattr(self, "responsive_layout", None), "window_width", 1900) < 1700
         )
@@ -437,8 +457,8 @@ class WidgetLayoutMixin:
         FlatButton(action_inner, "View Log", self._show_edit_log_window, bg="#607D8B", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
         FlatButton(action_inner, "Restore Backup", self._restore_latest_current_clip_backup, bg="#795548", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
 
-        # --- Status & Help ---
-        footer_frame = tk.Frame(main_frame, bg=BG_MAIN)
+    def _build_footer_panel(self, parent):
+        footer_frame = tk.Frame(parent, bg=BG_MAIN)
         footer_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
         self.status_label = tk.Label(footer_frame, text="", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_MAIN)
@@ -450,18 +470,11 @@ class WidgetLayoutMixin:
             font=("Segoe UI", 9), fg="#757575", bg=BG_MAIN,
         ).pack(side=tk.RIGHT)
 
-        # Bind a single resize handler on the root window.  Drawing on canvases
-        # or setting Label images does NOT trigger root <Configure>, so there is
-        # no feedback loop.
-        self.root.bind("<Configure>", self._on_window_configure, add="+")
-
     def _set_projection_camera(self, cam):
-        """Set camera for trajectory projection."""
         self.current_cam_for_projection = cam
         self._update_display()
 
     def _toggle_projection_camera(self):
-        """Toggle to next camera for projection."""
         cams = ["FL", "FC", "FR", "RL", "RC", "RR"]
         current_idx = cams.index(self.current_cam_for_projection)
         next_idx = (current_idx + 1) % len(cams)
@@ -489,7 +502,6 @@ class WidgetLayoutMixin:
             label.config(cursor=cursor)
 
     def _update_display(self):
-        """Update the display."""
         dataset_name, clip_stem, t0_us = self.samples[self.current_idx]
         mode_parts = []
         if self.gt_only:
@@ -551,7 +563,6 @@ class WidgetLayoutMixin:
             )
         )
 
-        # Update listbox
         self._refresh_trajectory_smoothness()
         self.traj_listbox.delete(0, tk.END)
         self.traj_listbox_to_traj_idx = []
@@ -586,7 +597,6 @@ class WidgetLayoutMixin:
         self._update_cot_text()
 
     def _update_cot_text(self):
-        """Display CoT for the selected trajectory when available."""
         cot = ""
         if 0 <= self.current_traj_idx < len(self.trajectories):
             cot = self.trajectories[self.current_traj_idx].get("cot", "")
@@ -598,12 +608,28 @@ class WidgetLayoutMixin:
         self.cot_text.insert(tk.END, cot)
         self.cot_text.configure(state=tk.DISABLED)
 
-    # ------------------------------------------------------------------
-    # Responsive resize – single root-level handler, no feedback loop
-    # ------------------------------------------------------------------
+    def _on_camera_frame_configure(self, event, cam):
+        if not hasattr(self, 'camera_display_meta'):
+            self.camera_display_meta = {}
+            
+        if cam not in self.camera_display_meta:
+            self.camera_display_meta[cam] = {}
+
+        target_w = event.width - 4
+        target_h = event.height - 24
+
+        old_w = self.camera_display_meta[cam].get("target_width", 0)
+        old_h = self.camera_display_meta[cam].get("target_height", 0)
+        
+        if abs(target_w - old_w) > 5 or abs(target_h - old_h) > 5:
+            self.camera_display_meta[cam]["target_width"] = target_w
+            self.camera_display_meta[cam]["target_height"] = target_h
+            
+            if hasattr(self, '_resize_after_id') and self._resize_after_id is not None:
+                self.root.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.root.after(150, self._on_window_resize_deferred)
 
     def _on_window_configure(self, event):
-        """Debounce window resize events; only fire when the root window itself changes."""
         if getattr(self, "_closing", False):
             return
         if event.widget is not self.root:
@@ -613,15 +639,10 @@ class WidgetLayoutMixin:
         self._resize_after_id = self.root.after(200, self._on_window_resize_deferred)
 
     def _on_window_resize_deferred(self):
-        """Called ~200 ms after the last root resize event.  Updates canvas dimension
-        attributes and triggers a single full redraw.  Safe: only root <Configure>
-        fires this, not canvas/label drawing operations.
-        """
         if getattr(self, "_closing", False):
             return
         self._resize_after_id = None
 
-        # Update BEV canvas dimensions from the actual rendered widget size
         if hasattr(self, 'traj_canvas'):
             try:
                 w = self.traj_canvas.winfo_width()
@@ -638,7 +659,6 @@ class WidgetLayoutMixin:
             except Exception:
                 pass
 
-        # Update speed canvas dimensions
         if hasattr(self, 'speed_canvas'):
             try:
                 w = self.speed_canvas.winfo_width()
@@ -648,8 +668,15 @@ class WidgetLayoutMixin:
                     self.speed_canvas_height = h
             except Exception:
                 pass
+                
+        if hasattr(self, 'middle_frame'):
+            try:
+                w = self.middle_frame.winfo_width()
+                if w > 10:
+                    self.middle_panel_width = w
+            except Exception:
+                pass
 
-        # Trigger a full redraw now that dimensions are updated
         if hasattr(self, 'trajectories') and self.trajectories:
             self._draw_trajectories()
             self._draw_speed_profile()
