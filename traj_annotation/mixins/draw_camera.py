@@ -71,7 +71,7 @@ class DrawCameraMixin:
                     "display_height": new_h,
                 })
                 
-                cam_frame_rgb = cv2.resize(cam_frame_rgb, (new_w, new_h))
+                cam_frame_rgb = cv2.resize(cam_frame_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
                 # Convert to PhotoImage
                 image = Image.fromarray(cam_frame_rgb)

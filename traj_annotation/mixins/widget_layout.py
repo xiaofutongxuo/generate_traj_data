@@ -159,7 +159,7 @@ class WidgetLayoutMixin:
 
         # Pane 1: BEV
         bev_frame = tk.Frame(left_paned, bg=BG_PANEL)
-        left_paned.add(bev_frame, weight=3)
+        left_paned.add(bev_frame, weight=5)
 
         bev_header = tk.Frame(bev_frame, bg=BG_PANEL)
         bev_header.pack(fill=tk.X, pady=(0, 5))
@@ -192,7 +192,7 @@ class WidgetLayoutMixin:
 
         # Pane 2: Pred Speed
         pred_frame = tk.Frame(left_paned, bg=BG_PANEL)
-        left_paned.add(pred_frame, weight=1)
+        left_paned.add(pred_frame, weight=3)
 
         pred_speed_header = tk.Frame(pred_frame, bg=BG_PANEL)
         pred_speed_header.pack(fill=tk.X, pady=(5, 2))
@@ -216,7 +216,7 @@ class WidgetLayoutMixin:
 
         # Pane 3: GT Speed
         gt_frame = tk.Frame(left_paned, bg=BG_PANEL)
-        left_paned.add(gt_frame, weight=1)
+        left_paned.add(gt_frame, weight=3)
 
         gt_speed_header_frame = tk.Frame(gt_frame, bg=BG_PANEL)
         gt_speed_header_frame.pack(fill=tk.X, pady=(5, 2))
@@ -385,7 +385,9 @@ class WidgetLayoutMixin:
     def _build_bottom_controls(self, parent):
         controls_outer_frame = tk.Frame(parent, bg=BG_MAIN)
         controls_outer_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        controls_outer_frame.grid_columnconfigure(0, weight=1)
+        
+        self.bottom_control_buttons = []
+        self.bottom_control_groups = {}
         
         compact_controls = bool(
             getattr(getattr(self, "responsive_layout", None), "window_width", 1900) < 1700
@@ -394,68 +396,83 @@ class WidgetLayoutMixin:
         control_font = ("Segoe UI", 9 if compact_controls else 10, "bold")
         btn_padx, btn_pady = (8, 4) if compact_controls else (12, 6)
 
-        def place_control_group(widget, row: int, is_last: bool = False):
-            if compact_controls:
-                widget.grid(row=row, column=0, sticky="w", pady=(0, 4 if not is_last else 0))
-            else:
-                widget.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10 if not is_last else 0))
+        def add_btn(parent, text, cmd, bg):
+            btn = FlatButton(parent, text, cmd, bg=bg, font=control_font, padx=btn_padx, pady=btn_pady)
+            btn.pack(side=tk.LEFT, padx=2)
+            self.bottom_control_buttons.append(btn)
+            return btn
 
         # Group 1: Drawing & Bezier Tools
-        draw_group = ttk.LabelFrame(controls_outer_frame, text="Drawing & Bezier Tools", style="Dark.TLabelframe")
-        place_control_group(draw_group, 0)
+        draw_group = ttk.LabelFrame(controls_outer_frame, text="绘制与贝塞尔", style="Dark.TLabelframe")
+        draw_group.grid(row=0, column=0, sticky="nw", padx=(0, 5), pady=(0, 4))
+        self.bottom_control_groups["draw"] = draw_group
+        
         draw_inner = tk.Frame(draw_group, bg=BG_PANEL)
-        draw_inner.pack(padx=8, pady=8)
+        draw_inner.pack(padx=6, pady=6)
 
         self.draw_line_var = tk.BooleanVar(value=self.draw_line_enabled)
-        tk.Checkbutton(
-            draw_inner, text="Draw Bezier", variable=self.draw_line_var, command=self._toggle_draw_line,
+        self.draw_check = tk.Checkbutton(
+            draw_inner, text="画贝塞尔", variable=self.draw_line_var, command=self._toggle_draw_line,
             bg=BG_PANEL, fg=FG_PRIMARY, selectcolor=BG_MAIN, activebackground=BG_PANEL, activeforeground=FG_PRIMARY,
             font=control_font
-        ).pack(side=tk.LEFT, padx=(0, 8))
+        )
+        self.draw_check.pack(side=tk.LEFT, padx=(0, 4))
+        self.bottom_control_buttons.append(self.draw_check)
 
-        FlatButton(draw_inner, "Add Final Stop", self._add_final_stop_point, bg="#D32F2F", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        add_btn(draw_inner, "加停止点", self._add_final_stop_point, "#D32F2F")
 
-        tk.Label(draw_inner, text="Stop(s):", bg=BG_PANEL, fg=FG_SECONDARY, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 2))
+        lbl_stop = tk.Label(draw_inner, text="停(s):", bg=BG_PANEL, fg=FG_SECONDARY, font=("Segoe UI", 9))
+        lbl_stop.pack(side=tk.LEFT, padx=(2, 2))
+        self.bottom_control_buttons.append(lbl_stop)
+
         self.stop_duration_var = tk.DoubleVar(value=self.stop_duration_seconds)
-        stop_spin = tk.Spinbox(
+        self.stop_spin = tk.Spinbox(
             draw_inner, from_=0.5, to=5.0, increment=0.5, width=4, textvariable=self.stop_duration_var,
             command=self._update_stop_duration_seconds, bg="#121212", fg=FG_PRIMARY, insertbackground="white", font=control_font, relief=tk.FLAT
         )
-        stop_spin.pack(side=tk.LEFT, padx=(0, 8))
-        stop_spin.bind("<Return>", lambda _event: self._update_stop_duration_seconds())
-        stop_spin.bind("<FocusOut>", lambda _event: self._update_stop_duration_seconds())
+        self.stop_spin.pack(side=tk.LEFT, padx=(0, 4))
+        self.stop_spin.bind("<Return>", lambda _event: self._update_stop_duration_seconds())
+        self.stop_spin.bind("<FocusOut>", lambda _event: self._update_stop_duration_seconds())
+        self.bottom_control_buttons.append(self.stop_spin)
 
-        FlatButton(draw_inner, "Undo Control", self._undo_manual_point, bg="#757575", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        ttk.Separator(draw_inner, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
-        FlatButton(draw_inner, "Save Curve Traj", self._save_manual_bezier_trajectory, bg="#009688", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(draw_inner, "Save Bezier Center", self._save_manual_bezier_as_cluster_center, bg="#FF9800", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(draw_inner, "Delete Bezier Center", self._delete_current_bezier_cluster_center, bg="#F44336", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        add_btn(draw_inner, "撤销控制点", self._undo_manual_point, "#757575")
+        ttk.Separator(draw_inner, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4)
+        add_btn(draw_inner, "保存曲线", self._save_manual_bezier_trajectory, "#009688")
+        add_btn(draw_inner, "存聚类中心", self._save_manual_bezier_as_cluster_center, "#FF9800")
+        add_btn(draw_inner, "删聚类中心", self._delete_current_bezier_cluster_center, "#F44336")
 
         # Group 2: Trajectory Editing
-        edit_group = ttk.LabelFrame(controls_outer_frame, text="Trajectory Editing", style="Dark.TLabelframe")
-        place_control_group(edit_group, 1)
+        edit_group = ttk.LabelFrame(controls_outer_frame, text="轨迹编辑", style="Dark.TLabelframe")
+        edit_group.grid(row=0, column=1, sticky="nw", padx=(0, 5), pady=(0, 4))
+        self.bottom_control_groups["edit"] = edit_group
+        
         edit_inner = tk.Frame(edit_group, bg=BG_PANEL)
-        edit_inner.pack(padx=8, pady=8)
+        edit_inner.pack(padx=6, pady=6)
 
-        FlatButton(edit_inner, "Edit Traj", self._start_saved_trajectory_edit, bg="#2196F3", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(edit_inner, "Save Edit", self._save_saved_trajectory_edit, bg="#4CAF50", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(edit_inner, "Cancel Edit", self._cancel_saved_trajectory_edit, bg="#9E9E9E", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(edit_inner, "Restore Edit", self._restore_saved_trajectory_edit, bg="#607D8B", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        add_btn(edit_inner, "编辑轨迹", self._start_saved_trajectory_edit, "#2196F3")
+        add_btn(edit_inner, "保存编辑", self._save_saved_trajectory_edit, "#4CAF50")
+        add_btn(edit_inner, "取消编辑", self._cancel_saved_trajectory_edit, "#9E9E9E")
+        add_btn(edit_inner, "恢复编辑", self._restore_saved_trajectory_edit, "#607D8B")
 
         # Group 3: GT & Global Actions
-        action_group = ttk.LabelFrame(controls_outer_frame, text="GT & Global Actions", style="Dark.TLabelframe")
-        place_control_group(action_group, 2, is_last=True)
+        action_group = ttk.LabelFrame(controls_outer_frame, text="全局操作", style="Dark.TLabelframe")
+        if compact_controls:
+            action_group.grid(row=1, column=0, columnspan=2, sticky="nw", padx=(0, 5), pady=(0, 0))
+        else:
+            action_group.grid(row=0, column=2, sticky="nw", padx=(0, 5), pady=(0, 4))
+        self.bottom_control_groups["action"] = action_group
+        
         action_inner = tk.Frame(action_group, bg=BG_PANEL)
-        action_inner.pack(padx=8, pady=8)
+        action_inner.pack(padx=6, pady=6)
 
-        FlatButton(action_inner, "Repair GT", self._repair_gt_future, bg="#9C27B0", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(action_inner, "Restore GT", self._restore_gt_future, bg="#795548", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        ttk.Separator(action_inner, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
-        FlatButton(action_inner, "Delete (Del)", self._delete_traj, bg="#F44336", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(action_inner, "Undo Delete", lambda: self._undo_delete_traj(redraw=True), bg="#4CAF50", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(action_inner, "Confirm Save (Ctrl+S)", self._save_results, bg="#2196F3", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(action_inner, "View Log", self._show_edit_log_window, bg="#607D8B", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
-        FlatButton(action_inner, "Restore Backup", self._restore_latest_current_clip_backup, bg="#795548", font=control_font, padx=btn_padx, pady=btn_pady).pack(side=tk.LEFT, padx=4)
+        add_btn(action_inner, "修复 GT", self._repair_gt_future, "#9C27B0")
+        add_btn(action_inner, "恢复 GT", self._restore_gt_future, "#795548")
+        ttk.Separator(action_inner, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4)
+        add_btn(action_inner, "删除(Del)", self._delete_traj, "#F44336")
+        add_btn(action_inner, "撤销删除", lambda: self._undo_delete_traj(redraw=True), "#4CAF50")
+        add_btn(action_inner, "保存(Ctrl+S)", self._save_results, "#2196F3")
+        add_btn(action_inner, "查看日志", self._show_edit_log_window, "#607D8B")
+        add_btn(action_inner, "恢复备份", self._restore_latest_current_clip_backup, "#795548")
 
     def _build_footer_panel(self, parent):
         footer_frame = tk.Frame(parent, bg=BG_MAIN)
@@ -682,3 +699,36 @@ class WidgetLayoutMixin:
             self._draw_speed_profile()
             self._draw_gt_speed_profile()
             self._draw_camera_images()
+
+        if hasattr(self, 'bottom_control_buttons') and hasattr(self, 'bottom_control_groups'):
+            try:
+                ww = self.root.winfo_width()
+                if ww > 10:
+                    if ww < 1300:
+                        f_size, px, py, is_compact = 8, 4, 2, True
+                    elif ww < 1550:
+                        f_size, px, py, is_compact = 9, 8, 4, True
+                    elif ww < 1800:
+                        f_size, px, py, is_compact = 10, 10, 5, False
+                    else:
+                        f_size, px, py, is_compact = 11, 14, 6, False
+
+                    new_font = ("Segoe UI", f_size, "bold")
+                    lbl_font = ("Segoe UI", f_size)
+                    
+                    for btn in self.bottom_control_buttons:
+                        if isinstance(btn, tk.Label):
+                            btn.config(font=lbl_font)
+                        elif isinstance(btn, (tk.Checkbutton, tk.Spinbox)):
+                            btn.config(font=new_font)
+                        elif isinstance(btn, tk.Button):
+                            btn.config(font=new_font, padx=px, pady=py)
+                            
+                    action_group = self.bottom_control_groups.get("action")
+                    if action_group:
+                        if is_compact:
+                            action_group.grid(row=1, column=0, columnspan=2, sticky="nw", padx=(0, 5), pady=(0, 0))
+                        else:
+                            action_group.grid(row=0, column=2, sticky="nw", padx=(0, 5), pady=(0, 4))
+            except Exception:
+                pass
