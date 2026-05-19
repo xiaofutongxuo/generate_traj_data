@@ -20,12 +20,13 @@ cd /home/ubuntu/Public/hzq/generate_traj_data
 标注 GUI 入口是：
 
 ```bash
-/home/ubuntu/Public/lxh/alpamayo_1.5/ar1_venv/bin/python trajectory_annotator.py \
+/home/ubuntu/Public/hzq/generate_traj_data/.venv/bin/python trajectory_annotator.py \
   --data_root /home/ubuntu/Public/train_data \
-  --output_dir /home/ubuntu/Public/yzb/generate_traj_data/output \
-  --calibration_dir /home/ubuntu/Public/yzb/triplane_tokenization/cailibration \
+  --output_dir /home/ubuntu/Public/hzq/generate_traj_data/output \
   --no_restore_last
 ```
+
+注意：当前标注 GUI 只推荐使用 `trajectory_annotator.py`。旧的 GUI 入口和旧包名不再作为文档中的启动方式维护。
 
 当前代码已按职责拆分为 `traj_core/`、`traj_annotation/`、`traj_inference/`：
 
@@ -86,6 +87,7 @@ output/cot.jsonl
 - 左侧 BEV 画布显示历史轨迹、GT future、生成/扩充轨迹、手工 Bezier 预览、cluster center 预览和停车点。
 - 中间区域显示相机图像，默认 `RL,FC,RR`，并支持切换投影相机。
 - 相机标定优先从 `data_root/{dataset}_converted/calibration/` 读取本地 XML（由 `Vision_calibration.tar.gz` 解压得到），旧的 `--calibration_dir` JSONL 目录仅作为兜底。
+- 若数据集中提供 `data-objects/{clip}.objects.parquet`，BEV 顶部 `交通参与者` 开关会同时控制 BEV 和 FC 前视图里的交通参与者位置点。该层来自原始感知结果，仅辅助判断碰撞风险，可能漏检或误检。
 - 自动停车点、GT 停车点、人工停车点会在 BEV 和 FC 图像中显示红点。
 - 速度图 hover 时可在速度图、BEV、FC 中同步高亮同一未来帧。
 
@@ -509,7 +511,8 @@ output/.backups/files/manual_points/
 - GUI 已新增屏幕自适应布局：启动时按屏幕大小计算窗口、BEV、速度曲线、相机图和右侧列表尺寸；
   Windows 小屏会尽量最大化窗口，并提供主界面横向/纵向滚动兜底，避免不同分辨率下按钮或面板不可见。
 - 数据处理工具已新增 `objects` stage，可从原始 CSD 的 `bev_object` 提取交通参与者，保存为
-  `train_data/{dataset}/data-objects/{clip}.objects.parquet`；GUI 会读取该目录，在 BEV 中显示交通参与者目标框、朝向和速度箭头。
+  `train_data/{dataset}/data-objects/{clip}.objects.parquet`；GUI 会读取该目录，勾选 `交通参与者` 后在 BEV 和 FC 前视图中显示位置点；当前不显示方向或速度辅助线。
+  该层是感知辅助信息，不是人工真值，可能漏检或误检。
 - `data_processed_tool` 的 `--layout by-raw-dir` 标定输出已补齐为当前 `train_data` 结构：
   数据集根目录包含 `Vision_calibration.tar.gz`，并解压出 `calibration/`。
 - 已新增单元测试覆盖 CLI 默认路径、环境变量覆盖、Windows 环境初始化、Linux-only `sys.path` 副作用清理和新入口包结构。
@@ -517,12 +520,12 @@ output/.backups/files/manual_points/
 待 Windows 实机验收：
 
 - `python trajectory_annotator.py --help`
-- import `TrajectoryViewerEnhanced`
+- `python -c "from traj_annotation.viewer import TrajectoryViewerEnhanced; print('import ok')"`
 - 打开一个最小样本 GUI
 - 不同屏幕分辨率下确认主界面可滚动，顶部选择区、右侧列表、底部保存/删除/编辑按钮都可访问
 - 样本切换、轨迹选择、manual Bezier/cluster center 扩充、删除、保存
 - parquet/`manual_points.json`/cluster center 文件备份和 `edit_log.jsonl` 写入
-- 若提供 `data-objects/`，BEV 中勾选 `交通参与者` 后可看到目标框、朝向和速度箭头
+- 若提供 `data-objects/`，勾选 `交通参与者` 后 BEV 和 FC 前视图中可看到交通参与者位置点，取消勾选后两处一起隐藏
 - OpenCV 视频读取是否需要额外 codec 或路径转义处理
 
 验收建议：

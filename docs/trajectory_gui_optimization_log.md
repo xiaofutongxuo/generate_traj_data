@@ -2,9 +2,10 @@
 
 本文档记录轨迹 GUI/标注工具的每次优化，按修改序号追踪需求、改动位置、验证方式和后续注意事项。
 
-> 路径说明：031 之前的条目保留当时真实文件名，例如 `trajectory_gui_enhanced.py` 和
-> `traj_gui_enhanced/`；031 之后当前入口为 `trajectory_annotator.py`，GUI 包为
-> `traj_annotation/`，共享工具为 `traj_core/`，推理包为 `traj_inference/`。
+> 路径说明：本文件是历史优化日志，不作为启动手册。031 之前的条目保留当时真实文件名，例如
+> `trajectory_gui_enhanced.py` 和 `traj_gui_enhanced/`；031 之后当前入口为 `trajectory_annotator.py`，
+> GUI 包为 `traj_annotation/`，共享工具为 `traj_core/`，推理包为 `traj_inference/`。实际启动命令请以
+> `README.md` 和 `docs/GUI操作手册.md/html` 为准。
 
 ## 001 停车点显式标识与悬浮提示
 
@@ -563,13 +564,24 @@
   - 数据处理主脚本新增 `objects` stage，默认从 CSD 的 `bev_object` 提取交通参与者，输出 `data-objects/{clip}.objects.parquet`。
   - objects parquet 每行表示一帧中的一个交通参与者，包含 `timestamp`、`object_id`、`object_type`、`x/y/z`、`x_kf/y_kf/z_kf`、`heading`、`length/width/height`、相对/绝对速度等字段。
   - `--layout by-raw-dir` 的 calibration 输出改为当前 GUI 使用的结构：数据集根目录下复制 `Vision_calibration.tar.gz`，并解压出 `calibration/`。
-  - GUI 新增 `traj_core.object_loader`，负责读取 `data-objects`、按当前 `t0_us` 找最近 object 帧、计算 BEV 目标矩形。
-  - BEV 顶部新增 `交通参与者` 开关；打开后显示目标框、朝向箭头和相对速度箭头。
+  - GUI 新增 `traj_core.object_loader`，负责读取 `data-objects`、按当前 `t0_us` 找最近 object 帧、转换到 GUI BEV 坐标，并提供 FC 前视图投影所需位置。
+  - BEV 顶部新增 `交通参与者` 开关；打开后在 BEV 和 FC 前视图中显示交通参与者位置点，关闭后两处一起隐藏。
 - 当前行为：
   - Windows 标注人员只需要拿到转换后的 `data-objects` parquet，不需要原始 `.csd` 或 protobuf 解析环境。
   - 缺少 `data-objects` 时 GUI 正常运行，只是不显示交通参与者。
-  - 第一版只做当前帧对象叠加，不做自动碰撞判定。
+  - 交通参与者点来自原始感知结果，不是人工真值，可能漏检或误检；当前只做当前帧辅助叠加，不做自动碰撞判定。
 - 验证方式：
   - 新增数据处理工具单元测试，覆盖 objects 字段、空 parquet schema 和 by-raw-dir calibration 输出结构。
   - 用真实 `/home/ubuntu/Public/origin_data` 小样本验证生成 `data-objects/*.objects.parquet` 和新的 calibration 目录结构。
-  - 新增 GUI helper 测试覆盖 object parquet 缺失时的空 schema、最近时间戳筛选和 BEV 矩形计算。
+  - 新增 GUI helper 测试覆盖 object parquet 缺失时的空 schema、最近时间戳筛选、BEV 坐标转换和 FC 点投影。
+
+## 033 文档整理到当前 GUI-only 标注版本
+
+- 日期：2026-05-19
+- 需求：README 和操作/阅读文档中不能再把旧版 GUI 入口当作使用方式；需要同步当前 `trajectory_annotator.py`、GUI-only 依赖、Windows/conda 启动方式和交通参与者点位辅助说明。
+- 改动文件：`README.md`、`docs/GUI操作手册.md`、`docs/GUI操作手册.html`、`docs/trajectory_gui_feature_status_and_todo.md`、`docs/trajectory_gui_optimization_log.md`
+- 主要改动：
+  - README 重写为当前标注工具说明，突出唯一推荐 GUI 入口 `trajectory_annotator.py`。
+  - GUI 操作手册同步 Markdown 和 HTML 两个版本，补充 conda/venv 环境、当前启动命令、Windows 启动方式和最小数据清单。
+  - 交通参与者文档统一改为“BEV + FC 位置点辅助层”，明确它来自感知结果，可能漏检或误检，不能当作真值或硬碰撞规则。
+  - TODO 状态文档同步最新功能边界：Windows 仅支持 GUI 标注，不覆盖本机模型推理；`data-objects` 显示为位置点，不显示方向或速度辅助线。

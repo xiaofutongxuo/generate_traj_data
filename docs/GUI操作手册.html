@@ -156,7 +156,8 @@ output 里是要标注、要扩充、会被 GUI 修改的伪 GT。</code></pre>
 <p>默认 GUI 会显示 <code>RL,FC,RR</code> 三个相机，所以至少要有这些相机对应的 mp4 和 timestamps 文件。如果启动时只想看前视相机，可以加：</p>
 <pre><code class="language-bash">--cameras FC</code></pre>
 <p>这样就只需要 FC 对应的视频和时间戳。</p>
-<p><code>data-objects/</code> 是交通参与者数据目录。没有它也能标注；有它的话，GUI 会在 BEV 和 FC 前视画面里用点标出其他车、行人等交通参与者的位置，更方便判断扩充轨迹有没有碰撞风险。</p>
+<p><code>data-objects/</code> 是交通参与者感知结果目录。没有它也能标注；有它的话，GUI 会在 BEV 和 FC 前视画面里用点标出感知到的其他车、行人等目标位置，帮助你判断扩充轨迹有没有潜在碰撞风险。</p>
+<p>注意：这些点不是人工真值，只是原始感知结果。它们可能漏检，也可能误检，只能作为辅助参考。最终判断仍然要看相机画面、BEV 轨迹和常识。</p>
 <h3 id="23-标注输出目录--outputdir">2.3 标注输出目录：<code>--output_dir</code></h3>
 <p>这是 GUI 读取已有伪 GT、写入标注结果的地方。通常应该提前放好模型生成出来的 parquet：</p>
 <pre><code class="language-text">output/
@@ -190,14 +191,15 @@ output 里是要标注、要扩充、会被 GUI 修改的伪 GT。</code></pre>
 <li>没有本地 calibration：必须给 <code>--calibration_dir</code> 指向旧 JSONL 标定目录。</li>
 </ul>
 <h3 id="25-可选交通参与者数据">2.5 可选：交通参与者数据</h3>
-<p>如果需要在 BEV 里看交通参与者，需要提前从原始 <code>.csd</code> 提取：</p>
+<p>如果需要在 BEV 和 FC 画面里看交通参与者位置点，需要提前从原始 <code>.csd</code> 提取：</p>
 <pre><code class="language-text">train_data/{dataset_name}/data-objects/{clip}.objects.parquet</code></pre>
-<p>这个文件一般由 <code>data_processed_tool</code> 生成，不需要标注人员自己手写。里面每一行是某一帧的一个交通参与者，包含位置、朝向、长宽高、速度等信息。</p>
+<p>这个文件一般由 <code>data_processed_tool</code> 生成，不需要标注人员自己手写。里面每一行是某一帧的一个感知目标，包含位置、长宽高、速度等信息。</p>
 <p>简单理解：</p>
 <ul>
 <li>没有 <code>data-objects/</code>：GUI 正常打开，只是不显示交通参与者。</li>
 <li>有 <code>data-objects/</code>：BEV 顶部勾选 <code>交通参与者</code> 后，BEV 和 FC 前视画面会同时显示交通参与者的位置点；取消勾选后两边一起隐藏。</li>
 <li>标注同事不需要拿原始 <code>.csd</code>，只需要拿转换好的 parquet。</li>
+<li>交通参与者点只表示感知模块的输出，不表示一定真实存在，也不表示所有真实目标都被识别到了。</li>
 </ul>
 <h3 id="26-可选场景类别文件">2.6 可选：场景类别文件</h3>
 <p>如果想按场景类别筛选样本，可以在数据集目录下放：</p>
@@ -262,7 +264,6 @@ conda activate traj_gui
 python trajectory_annotator.py \
   --data_root /path/to/train_data \
   --output_dir /path/to/output \
-  --calibration_dir /path/to/calibration \
   --no_restore_last</code></pre>
 <p>Windows 上路径可以写成这样：</p>
 <pre><code class="language-powershell">cd D:\path\to\generate_traj_data
@@ -271,7 +272,6 @@ conda activate traj_gui
 python trajectory_annotator.py `
   --data_root D:\traj\train_data `
   --output_dir D:\traj\output `
-  --calibration_dir D:\traj\calibration `
   --no_restore_last</code></pre>
 <h3 id="42-windows-venv-启动示例">4.2 Windows venv 启动示例</h3>
 <pre><code class="language-powershell">cd D:\path\to\generate_traj_data
@@ -279,16 +279,14 @@ python trajectory_annotator.py `
 .\.venv\Scripts\python.exe trajectory_annotator.py `
   --data_root D:\traj\train_data `
   --output_dir D:\traj\output `
-  --calibration_dir D:\traj\calibration `
   --no_restore_last</code></pre>
-<p>如果标定已经在 <code>D:\traj\train_data\{dataset}\calibration\</code> 里面，<code>--calibration_dir</code> 仍然可以传一个空的兜底目录，例如 <code>D:\traj\calibration</code>。</p>
+<p>如果标定已经在 <code>D:\traj\train_data\{dataset}\calibration\</code> 里面，不需要传 <code>--calibration_dir</code>。只有没有本地 <code>calibration/</code> 时，才加 <code>--calibration_dir D:\traj\calibration</code> 指向旧 JSONL 标定目录。</p>
 <h3 id="43-linux-venv-启动示例">4.3 Linux venv 启动示例</h3>
 <pre><code class="language-bash">cd /path/to/generate_traj_data
 
 ./.venv/bin/python trajectory_annotator.py \
   --data_root /data/train_data \
   --output_dir /data/output \
-  --calibration_dir /data/calibration \
   --no_restore_last</code></pre>
 <h3 id="44-常用启动参数">4.4 常用启动参数</h3>
 <p>只看某个数据集：</p>
@@ -322,7 +320,7 @@ python trajectory_annotator.py `
 <p>建议每个样本按这个流程走：</p>
 <ol>
 <li>选中一个 Dataset、Clip、t0。</li>
-<li>看相机图和 BEV，确认这个时刻是否正常；如果有交通参与者显示，顺便看一下是否有明显碰撞风险。</li>
+<li>看相机图和 BEV，确认这个时刻是否正常；如果有交通参与者显示，可以作为碰撞风险参考，但不要只看点位下结论。</li>
 <li>看右侧已有伪 GT 轨迹。</li>
 <li>明显不合理的轨迹先标记删除。</li>
 <li>如果轨迹种类不够，选择一种方式补轨迹：</li>
@@ -464,7 +462,6 @@ python trajectory_annotator.py `
 <pre><code class="language-bash">python trajectory_annotator.py \
   --data_root /path/to/train_data \
   --output_dir /path/to/output \
-  --calibration_dir /path/to/calibration \
   --no_restore_last</code></pre>
 <h2 id="15-常见问题">15. 常见问题</h2>
 <h3 id="151-gui-打开后没有样本">15.1 GUI 打开后没有样本</h3>
@@ -501,7 +498,22 @@ python trajectory_annotator.py `
 <li>左侧 BEV 顶部的 <code>交通参与者</code> 是否被勾选。这个开关会同时控制 BEV 和 FC 前视画面里的交通参与者位置点。</li>
 </ul>
 <p>没有 <code>data-objects/</code> 不影响轨迹标注，只是少了碰撞风险辅助参考。</p>
-<h3 id="155-保存失败">15.5 保存失败</h3>
+<h3 id="155-交通参与者点明显不准">15.5 交通参与者点明显不准</h3>
+<p>这是可能出现的。<code>data-objects</code> 来自原始感知结果，不是人工标注真值。</p>
+<p>常见情况：</p>
+<ul>
+<li>画面里有车或人，但没有点，这是漏检。</li>
+<li>画面里没有真实目标，但 BEV 或 FC 里有点，这是误检。</li>
+<li>雨天、护栏、路边静态物、远处小目标、侧向目标、镜头畸变等，都可能让感知结果不稳定。</li>
+<li><code>bev_object</code> 本身也可能有位置误差，所以点位不能当作绝对碰撞判定。</li>
+</ul>
+<p>处理建议：</p>
+<ul>
+<li>把交通参与者点当作提醒层，不要当作硬规则。</li>
+<li>判断轨迹是否可用时，仍然以相机画面、BEV 自车轨迹、道路结构和常识为主。</li>
+<li>如果某个点明显不可信，可以忽略它；如果画面里有重要目标但没有点，也要按真实画面判断风险。</li>
+</ul>
+<h3 id="156-保存失败">15.6 保存失败</h3>
 <p>检查：</p>
 <ul>
 <li><code>--output_dir</code> 是否有写权限。</li>
@@ -509,7 +521,7 @@ python trajectory_annotator.py `
 <li>Windows 上路径是否过长或包含奇怪字符。</li>
 <li>多个人是否同时在写同一个 output。</li>
 </ul>
-<h3 id="156-不小心删错或保存错">15.6 不小心删错或保存错</h3>
+<h3 id="157-不小心删错或保存错">15.7 不小心删错或保存错</h3>
 <p>可以先看：</p>
 <ul>
 <li><code>output/edit_log.jsonl</code></li>
@@ -518,7 +530,7 @@ python trajectory_annotator.py `
 <li><code>output/.backups/</code></li>
 </ul>
 <p>恢复前建议先复制一份当前 output，避免二次误操作。</p>
-<h3 id="157-屏幕比较小按钮或面板显示不全">15.7 屏幕比较小，按钮或面板显示不全</h3>
+<h3 id="158-屏幕比较小按钮或面板显示不全">15.8 屏幕比较小，按钮或面板显示不全</h3>
 <p>新版 GUI 会根据屏幕大小自动缩放 BEV、速度曲线、相机图和右侧列表。Windows 小屏上会尽量自动最大化窗口。</p>
 <p>如果仍然看不全：</p>
 <ul>

@@ -76,7 +76,9 @@ train_data/
 
 这样就只需要 FC 对应的视频和时间戳。
 
-`data-objects/` 是交通参与者数据目录。没有它也能标注；有它的话，GUI 会在 BEV 和 FC 前视画面里用点标出其他车、行人等交通参与者的位置，更方便判断扩充轨迹有没有碰撞风险。
+`data-objects/` 是交通参与者感知结果目录。没有它也能标注；有它的话，GUI 会在 BEV 和 FC 前视画面里用点标出感知到的其他车、行人等目标位置，帮助你判断扩充轨迹有没有潜在碰撞风险。
+
+注意：这些点不是人工真值，只是原始感知结果。它们可能漏检，也可能误检，只能作为辅助参考。最终判断仍然要看相机画面、BEV 轨迹和常识。
 
 ### 2.3 标注输出目录：`--output_dir`
 
@@ -127,19 +129,20 @@ calibration/
 
 ### 2.5 可选：交通参与者数据
 
-如果需要在 BEV 里看交通参与者，需要提前从原始 `.csd` 提取：
+如果需要在 BEV 和 FC 画面里看交通参与者位置点，需要提前从原始 `.csd` 提取：
 
 ```text
 train_data/{dataset_name}/data-objects/{clip}.objects.parquet
 ```
 
-这个文件一般由 `data_processed_tool` 生成，不需要标注人员自己手写。里面每一行是某一帧的一个交通参与者，包含位置、朝向、长宽高、速度等信息。
+这个文件一般由 `data_processed_tool` 生成，不需要标注人员自己手写。里面每一行是某一帧的一个感知目标，包含位置、长宽高、速度等信息。
 
 简单理解：
 
 - 没有 `data-objects/`：GUI 正常打开，只是不显示交通参与者。
 - 有 `data-objects/`：BEV 顶部勾选 `交通参与者` 后，BEV 和 FC 前视画面会同时显示交通参与者的位置点；取消勾选后两边一起隐藏。
 - 标注同事不需要拿原始 `.csd`，只需要拿转换好的 parquet。
+- 交通参与者点只表示感知模块的输出，不表示一定真实存在，也不表示所有真实目标都被识别到了。
 
 ### 2.6 可选：场景类别文件
 
@@ -253,7 +256,6 @@ conda activate traj_gui
 python trajectory_annotator.py \
   --data_root /path/to/train_data \
   --output_dir /path/to/output \
-  --calibration_dir /path/to/calibration \
   --no_restore_last
 ```
 
@@ -266,7 +268,6 @@ conda activate traj_gui
 python trajectory_annotator.py `
   --data_root D:\traj\train_data `
   --output_dir D:\traj\output `
-  --calibration_dir D:\traj\calibration `
   --no_restore_last
 ```
 
@@ -278,11 +279,10 @@ cd D:\path\to\generate_traj_data
 .\.venv\Scripts\python.exe trajectory_annotator.py `
   --data_root D:\traj\train_data `
   --output_dir D:\traj\output `
-  --calibration_dir D:\traj\calibration `
   --no_restore_last
 ```
 
-如果标定已经在 `D:\traj\train_data\{dataset}\calibration\` 里面，`--calibration_dir` 仍然可以传一个空的兜底目录，例如 `D:\traj\calibration`。
+如果标定已经在 `D:\traj\train_data\{dataset}\calibration\` 里面，不需要传 `--calibration_dir`。只有没有本地 `calibration/` 时，才加 `--calibration_dir D:\traj\calibration` 指向旧 JSONL 标定目录。
 
 ### 4.3 Linux venv 启动示例
 
@@ -292,7 +292,6 @@ cd /path/to/generate_traj_data
 ./.venv/bin/python trajectory_annotator.py \
   --data_root /data/train_data \
   --output_dir /data/output \
-  --calibration_dir /data/calibration \
   --no_restore_last
 ```
 
@@ -351,7 +350,7 @@ GUI 打开后可以按这个顺序看：
 建议每个样本按这个流程走：
 
 1. 选中一个 Dataset、Clip、t0。
-2. 看相机图和 BEV，确认这个时刻是否正常；如果有交通参与者显示，顺便看一下是否有明显碰撞风险。
+2. 看相机图和 BEV，确认这个时刻是否正常；如果有交通参与者显示，可以作为碰撞风险参考，但不要只看点位下结论。
 3. 看右侧已有伪 GT 轨迹。
 4. 明显不合理的轨迹先标记删除。
 5. 如果轨迹种类不够，选择一种方式补轨迹：
@@ -521,7 +520,6 @@ output/
 python trajectory_annotator.py \
   --data_root /path/to/train_data \
   --output_dir /path/to/output \
-  --calibration_dir /path/to/calibration \
   --no_restore_last
 ```
 
@@ -574,7 +572,24 @@ python trajectory_annotator.py \
 
 没有 `data-objects/` 不影响轨迹标注，只是少了碰撞风险辅助参考。
 
-### 15.5 保存失败
+### 15.5 交通参与者点明显不准
+
+这是可能出现的。`data-objects` 来自原始感知结果，不是人工标注真值。
+
+常见情况：
+
+- 画面里有车或人，但没有点，这是漏检。
+- 画面里没有明显障碍物，但 BEV/FC 里有点，这是误检。
+- 雨天、护栏、路边设施、远处目标、侧方目标、画面畸变都可能让点位不准。
+- `bev_object` 相对稳定一些，但它本身也会误检和漏检。
+
+处理建议：
+
+- 把交通参与者点当作提醒层，不要当作硬规则。
+- 主要还是看相机画面和轨迹是否合理。
+- 遇到点位明显不可信时，以画面和轨迹几何为准。
+
+### 15.6 保存失败
 
 检查：
 
@@ -583,7 +598,7 @@ python trajectory_annotator.py \
 - Windows 上路径是否过长或包含奇怪字符。
 - 多个人是否同时在写同一个 output。
 
-### 15.6 不小心删错或保存错
+### 15.7 不小心删错或保存错
 
 可以先看：
 
@@ -594,7 +609,7 @@ python trajectory_annotator.py \
 
 恢复前建议先复制一份当前 output，避免二次误操作。
 
-### 15.7 屏幕比较小，按钮或面板显示不全
+### 15.8 屏幕比较小，按钮或面板显示不全
 
 新版 GUI 会根据屏幕大小自动缩放 BEV、速度曲线、相机图和右侧列表。Windows 小屏上会尽量自动最大化窗口。
 
