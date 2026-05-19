@@ -25,6 +25,7 @@ from traj_core.data_loader import (
 )
 from traj_core.frame_index import build_video_frame_t0_candidates, video_frame_coverage_summary
 from traj_core.calibration_loader import load_calibration_for_segment
+from traj_core.object_loader import empty_objects_frame, load_objects_for_clip, nearest_objects_at_timestamp
 from traj_core.visualization import draw_trajectory_on_image, ego_to_bev_points, load_image_from_frame
 
 from traj_core.constants import *
@@ -77,6 +78,25 @@ class SampleIOMixin:
         if "t0_us" not in df.columns or len(df) == 0:
             return set()
         return {int(value) for value in df["t0_us"].dropna().astype("int64").unique()}
+
+    def _load_objects_for_sample(self, dataset_name: str, clip_stem: str, t0_us: int) -> pd.DataFrame:
+        """Load nearest-frame traffic participants for the current sample."""
+        cache = getattr(self, "object_data_cache", None)
+        cache_key = (dataset_name, clip_stem)
+        try:
+            if cache is not None and cache_key in cache:
+                object_df = cache[cache_key]
+                cache.move_to_end(cache_key)
+            else:
+                object_df = load_objects_for_clip(self.data_root, dataset_name, clip_stem)
+                if cache is not None:
+                    cache[cache_key] = object_df
+                    while len(cache) > getattr(self, "object_data_cache_limit", 12):
+                        cache.popitem(last=False)
+            return nearest_objects_at_timestamp(object_df, int(t0_us))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: Could not load traffic participants: {exc}")
+            return empty_objects_frame()
 
     def _clip_stems_for_video_index(self, dataset_path: Path) -> list[str]:
         clip_stems = get_clip_stems_from_dataset(dataset_path)
@@ -733,6 +753,7 @@ class SampleIOMixin:
             print(f"Warning: Could not load data: {e}")
             self.conv_data = None
             self.calibration = None
+        self.current_objects = self._load_objects_for_sample(dataset_name, clip_stem, int(t0_us))
         self._save_viewer_state()
 
     def _sample_index_coverage_status(self, dataset_name: str, clip_stem: str, t0_us: int) -> str:

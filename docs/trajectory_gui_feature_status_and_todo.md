@@ -508,6 +508,10 @@ output/.backups/files/manual_points/
 - 根目录 `requirements.txt` 已导出 GUI-only 依赖，不包含 Alpamayo/VLA 推理依赖。
 - GUI 已新增屏幕自适应布局：启动时按屏幕大小计算窗口、BEV、速度曲线、相机图和右侧列表尺寸；
   Windows 小屏会尽量最大化窗口，并提供主界面横向/纵向滚动兜底，避免不同分辨率下按钮或面板不可见。
+- 数据处理工具已新增 `objects` stage，可从原始 CSD 的 `bev_object` 提取交通参与者，保存为
+  `train_data/{dataset}/data-objects/{clip}.objects.parquet`；GUI 会读取该目录，在 BEV 中显示交通参与者目标框、朝向和速度箭头。
+- `data_processed_tool` 的 `--layout by-raw-dir` 标定输出已补齐为当前 `train_data` 结构：
+  数据集根目录包含 `Vision_calibration.tar.gz`，并解压出 `calibration/`。
 - 已新增单元测试覆盖 CLI 默认路径、环境变量覆盖、Windows 环境初始化、Linux-only `sys.path` 副作用清理和新入口包结构。
 
 待 Windows 实机验收：
@@ -518,6 +522,7 @@ output/.backups/files/manual_points/
 - 不同屏幕分辨率下确认主界面可滚动，顶部选择区、右侧列表、底部保存/删除/编辑按钮都可访问
 - 样本切换、轨迹选择、manual Bezier/cluster center 扩充、删除、保存
 - parquet/`manual_points.json`/cluster center 文件备份和 `edit_log.jsonl` 写入
+- 若提供 `data-objects/`，BEV 中勾选 `交通参与者` 后可看到目标框、朝向和速度箭头
 - OpenCV 视频读取是否需要额外 codec 或路径转义处理
 
 验收建议：
@@ -533,7 +538,7 @@ output/.backups/files/manual_points/
 4. TODO-004 代码闭环已完成：基础 dynamics、保存前优化、已保存轨迹 BEV 关键帧编辑、接受/取消/恢复原状和编辑状态保护已经接入；下一步主要是真实 GUI 验收和手感调参。
 5. TODO-005 已实现代码闭环：cluster center 未保存 preview 可通过 `Hide` 隐藏，cluster preview 切换/拖拽后 `Diversity Speed Profile` 有回归测试保护；仍建议真实 GUI 验收按钮位置和交互手感。
 6. TODO-007 已完成：GUI parquet、`manual_points.json` 和 cluster center 库文件写回前自动备份，写回后记录 `edit_log.jsonl`；GUI 提供日志查看和当前 clip parquet 备份恢复入口。
-7. TODO-008 GUI 第一版和目录职责拆分已实现：路径默认值、环境初始化、Windows README、新入口 `trajectory_annotator.py`、`traj_core/`/`traj_annotation/`/`traj_inference/` 分层和回归测试已补齐；下一步是 Windows 实机验收。
+7. TODO-008 GUI 第一版和目录职责拆分已实现：路径默认值、环境初始化、Windows README、新入口 `trajectory_annotator.py`、`traj_core/`/`traj_annotation/`/`traj_inference/` 分层、`data-objects` 交通参与者叠加和回归测试已补齐；下一步是 Windows 实机验收。
 
 ## 6. 待确认问题
 

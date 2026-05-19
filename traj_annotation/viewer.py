@@ -68,6 +68,7 @@ class TrajectoryViewerEnhanced(
         self.data_root = Path(data_root)
         self.output_dir = Path(output_dir)
         self.calibration_dir = Path(calibration_dir)
+        self._closing = False
         self.gt_only = bool(gt_only)
         self.gt_stride_frames = max(1, int(gt_stride_frames))
         self.index_mode = str(index_mode or "generated")
@@ -197,6 +198,11 @@ class TrajectoryViewerEnhanced(
         self.drag_state = None
         self.visual_data_cache = OrderedDict()
         self.visual_data_cache_limit = 8
+        self.object_data_cache = OrderedDict()
+        self.object_data_cache_limit = 12
+        self.current_objects = None
+        self.show_objects_enabled = True
+        self.show_objects_var = None
         self.camera_base_images = {}
         self.gt_future_mode = "raw"
         self.samples_by_dataset = {}
@@ -237,6 +243,7 @@ class TrajectoryViewerEnhanced(
 
         self._create_widgets()
         self._update_display()
+        self.root.protocol("WM_DELETE_WINDOW", self._shutdown_gui)
 
         # Keyboard shortcuts
         self.root.bind("<Left>", lambda e: self._prev_sample())
@@ -250,14 +257,66 @@ class TrajectoryViewerEnhanced(
         self.root.bind("<Control-Z>", self._on_undo_saved_trajectory_edit_key)
         self.root.bind("<Control-y>", self._on_redo_saved_trajectory_edit_key)
         self.root.bind("<Control-Y>", self._on_redo_saved_trajectory_edit_key)
-        self.root.bind("<q>", lambda e: self.root.quit())
+        self.root.bind("<q>", lambda e: self._shutdown_gui())
         self.root.bind("<Tab>", lambda e: self._toggle_projection_camera())
         self.root.bind("<KeyPress-minus>", lambda e: self._cycle_selected_cluster_center(-1))
         self.root.bind("<KeyPress-underscore>", lambda e: self._cycle_selected_cluster_center(-1))
         self.root.bind("<KeyPress-plus>", lambda e: self._cycle_selected_cluster_center(1))
         self.root.bind("<KeyPress-equal>", lambda e: self._cycle_selected_cluster_center(1))
 
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            if not getattr(self, "_closing", False):
+                self._shutdown_gui()
+
+    def _shutdown_gui(self):
+        """Release Tk state cleanly before the GUI process exits."""
+        if getattr(self, "_closing", False):
+            return "break"
+        self._closing = True
+
+        self.drag_state = None
+        self.draw_line_enabled = False
+
+        root = getattr(self, "root", None)
+        if root is not None:
+            after_id = getattr(self, "_resize_after_id", None)
+            if after_id is not None:
+                try:
+                    root.after_cancel(after_id)
+                except Exception:
+                    pass
+                self._resize_after_id = None
+
+            try:
+                grab_widget = root.grab_current()
+            except Exception:
+                grab_widget = None
+            if grab_widget is not None:
+                try:
+                    grab_widget.grab_release()
+                except Exception:
+                    pass
+
+        for cleanup_name in ("_hide_traj_list_tooltip", "_hide_stop_tooltip"):
+            cleanup = getattr(self, cleanup_name, None)
+            if callable(cleanup):
+                try:
+                    cleanup()
+                except Exception:
+                    pass
+
+        if root is not None:
+            try:
+                root.quit()
+            except Exception:
+                pass
+            try:
+                root.destroy()
+            except Exception:
+                pass
+        return "break"
 
     def _configure_responsive_window(self) -> None:
         screen_width = self.root.winfo_screenwidth()
@@ -293,6 +352,8 @@ class TrajectoryViewerEnhanced(
         self.scene_combo_width = layout.scene_combo_width
 
     def _try_maximize_root(self) -> None:
+        if getattr(self, "_closing", False):
+            return
         maximized = False
         try:
             self.root.state("zoomed")
@@ -314,6 +375,8 @@ class TrajectoryViewerEnhanced(
         We synthetically fire the resize pipeline instead of calling _update_display
         directly, so the debounced handler updates widget dimensions first.
         """
+        if getattr(self, "_closing", False):
+            return
         try:
             self.root.update_idletasks()
             # Trigger the debounced resize pipeline by scheduling the deferred

@@ -18,6 +18,7 @@ setup_environment()
 
 from traj_core.data_loader import get_dataset_names, get_clip_stems_from_dataset, load_data, get_t0_candidates
 from traj_core.calibration_loader import load_calibration_for_segment
+from traj_core.object_loader import object_center_xy
 from traj_core.visualization import draw_trajectory_on_image, ego_to_bev_points, load_image_from_frame
 
 from traj_core.constants import *
@@ -46,6 +47,7 @@ class DrawCameraMixin:
                 # Project trajectories onto this camera
                 if self.calibration and cam in self.calibration:
                     cam_frame_rgb = self._draw_trajectory_projection(cam_frame_rgb, cam)
+                cam_frame_rgb = self._draw_traffic_participants_on_image(cam_frame_rgb, cam)
                 cam_frame_rgb = self._draw_manual_camera_points(cam_frame_rgb, cam)
 
                 # Resize for display
@@ -136,6 +138,65 @@ class DrawCameraMixin:
             )
 
         return img
+
+    def _traffic_object_color_rgb(self, object_type: int) -> tuple[int, int, int]:
+        if object_type in {1, 2, 3, 4}:
+            return (255, 209, 102)
+        if object_type in {5, 6, 7, 8}:
+            return (248, 150, 30)
+        return (142, 202, 230)
+
+    def _draw_traffic_participants_on_image(self, img, cam_name):
+        """Project traffic participant position dots onto the FC camera image."""
+        if cam_name != "FC":
+            return img
+        var = getattr(self, "show_objects_var", None)
+        if var is not None:
+            enabled = bool(var.get())
+        else:
+            enabled = bool(getattr(self, "show_objects_enabled", True))
+        if not enabled:
+            return img
+        if self.calibration is None or cam_name not in self.calibration:
+            return img
+
+        objects_df = getattr(self, "current_objects", None)
+        if objects_df is None or len(objects_df) == 0:
+            return img
+
+        points = []
+        colors = []
+        for _, row in objects_df.iterrows():
+            try:
+                center_x, center_y = object_center_xy(row)
+            except Exception:
+                continue
+            if not (np.isfinite(center_x) and np.isfinite(center_y)):
+                continue
+            points.append([float(center_x), float(center_y), 0.0])
+            object_type = int(row.get("object_type", 0) or 0)
+            colors.append(self._traffic_object_color_rgb(object_type))
+        if not points:
+            return img
+
+        calib = self.calibration[cam_name]
+        points_xyz = np.asarray(points, dtype=np.float32)
+        bev_points = ego_to_bev_points(points_xyz)
+        u, v, z = calib.project_bev_to_image(bev_points)
+        visible = calib.is_point_visible(u, v, z)
+
+        out = img.copy()
+        height, width = out.shape[:2]
+        for idx, is_visible in enumerate(visible):
+            if not bool(is_visible):
+                continue
+            center = (int(round(u[idx])), int(round(v[idx])))
+            if not (0 <= center[0] < width and 0 <= center[1] < height):
+                continue
+            color = colors[idx]
+            cv2.circle(out, center, 7, color, -1)
+            cv2.circle(out, center, 7, (17, 17, 17), 2)
+        return out
 
     def _draw_manual_stop_markers_on_image(self, img, cam_name):
         """Project stop markers onto a camera image."""

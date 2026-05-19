@@ -553,3 +553,23 @@
 - 验证方式：
   - 新增 `tests/test_project_structure.py` 覆盖新入口和三层包 import。
   - 更新 `tests/test_gui_helpers.py` 到新包路径。
+
+## 032 BEV 交通参与者数据预处理与 GUI 叠加
+
+- 日期：2026-05-18
+- 需求：轨迹多样化标注时，希望从原始 CSD 中提取交通参与者位置，在 GUI BEV 视角中显示，辅助判断扩充轨迹是否有碰撞风险；同时数据处理工具输出的 calibration 目录需要补齐为当前 `train_data` 的结构。
+- 改动文件：`data_processed_tool/convert_chengdu_raw_to_hangzhou_format.py`、`data_processed_tool/csd_to_objects_parquet.py`、`data_processed_tool/tests/test_conversion_outputs.py`、`data_processed_tool/README.md`、`traj_core/object_loader.py`、`traj_annotation/mixins/sample_io.py`、`traj_annotation/mixins/draw_bev.py`、`traj_annotation/mixins/widget_layout.py`、`tests/test_gui_helpers.py`、`README.md`、`docs/GUI操作手册.md`
+- 主要改动：
+  - 数据处理主脚本新增 `objects` stage，默认从 CSD 的 `bev_object` 提取交通参与者，输出 `data-objects/{clip}.objects.parquet`。
+  - objects parquet 每行表示一帧中的一个交通参与者，包含 `timestamp`、`object_id`、`object_type`、`x/y/z`、`x_kf/y_kf/z_kf`、`heading`、`length/width/height`、相对/绝对速度等字段。
+  - `--layout by-raw-dir` 的 calibration 输出改为当前 GUI 使用的结构：数据集根目录下复制 `Vision_calibration.tar.gz`，并解压出 `calibration/`。
+  - GUI 新增 `traj_core.object_loader`，负责读取 `data-objects`、按当前 `t0_us` 找最近 object 帧、计算 BEV 目标矩形。
+  - BEV 顶部新增 `交通参与者` 开关；打开后显示目标框、朝向箭头和相对速度箭头。
+- 当前行为：
+  - Windows 标注人员只需要拿到转换后的 `data-objects` parquet，不需要原始 `.csd` 或 protobuf 解析环境。
+  - 缺少 `data-objects` 时 GUI 正常运行，只是不显示交通参与者。
+  - 第一版只做当前帧对象叠加，不做自动碰撞判定。
+- 验证方式：
+  - 新增数据处理工具单元测试，覆盖 objects 字段、空 parquet schema 和 by-raw-dir calibration 输出结构。
+  - 用真实 `/home/ubuntu/Public/origin_data` 小样本验证生成 `data-objects/*.objects.parquet` 和新的 calibration 目录结构。
+  - 新增 GUI helper 测试覆盖 object parquet 缺失时的空 schema、最近时间戳筛选和 BEV 矩形计算。

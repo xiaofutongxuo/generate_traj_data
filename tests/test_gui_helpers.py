@@ -17,6 +17,13 @@ from traj_core.frame_index import (
     valid_video_frame_indices,
 )
 from traj_core.data_loader import filter_t0s_with_full_future
+from traj_core.object_loader import (
+    OBJECT_COLUMNS as GUI_OBJECT_COLUMNS,
+    object_center_xy,
+    load_objects_for_clip,
+    nearest_objects_at_timestamp,
+    object_footprint_xy,
+)
 from traj_core.calibration_loader import load_calibration_for_segment
 from traj_core.constants import HISTORY_SPEED_COLOR_HEX, SPEED_EDIT_LOCAL_RADIUS_FRAMES
 from traj_core.dynamics import (
@@ -31,10 +38,13 @@ from traj_annotation.environment import setup_environment
 from traj_core.math_utils import _rgb_to_hex, _trajectory_base_color, _resample_curve_by_distance
 from traj_annotation.mixins.cluster_controls import ClusterControlsMixin
 from traj_annotation.mixins.delete_controls import DeleteControlsMixin
+from traj_annotation.mixins.draw_bev import DrawBevMixin
+from traj_annotation.mixins.draw_camera import DrawCameraMixin
 from traj_annotation.mixins.navigation import NavigationMixin
 from traj_annotation.mixins.sample_io import SampleIOMixin
 from traj_annotation.mixins.saved_traj_editing import SavedTrajectoryEditingMixin
 from traj_annotation.responsive_layout import compute_responsive_layout
+from traj_annotation.viewer import TrajectoryViewerEnhanced
 from traj_annotation.save_audit import (
     apply_gui_edit_metadata,
     restore_file_from_backup_with_audit,
@@ -237,6 +247,290 @@ class GuiHelperTests(unittest.TestCase):
             self.assertEqual(gui_cli.default_output_dir(), r"D:\traj\output")
             self.assertEqual(gui_cli.default_calibration_dir(), r"D:\traj\calibration")
 
+    def test_load_objects_for_clip_returns_empty_schema_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            df = load_objects_for_clip(tmpdir, "demo_converted", "missing_clip")
+
+        self.assertEqual(list(df.columns), GUI_OBJECT_COLUMNS)
+        self.assertEqual(len(df), 0)
+
+    def test_nearest_objects_at_timestamp_filters_by_time_window(self):
+        df = pd.DataFrame(
+            {
+                "timestamp": [1_000_000, 1_100_000, 1_100_000, 1_400_000],
+                "frame_index": [0, 1, 1, 4],
+                "source": ["bev_object"] * 4,
+                "object_id": [1, 2, 3, 4],
+                "object_type": [1, 1, 5, 1],
+                "confidence": [0.9, 0.8, 0.7, 0.6],
+                "x": [10.0, 20.0, 21.0, 40.0],
+                "y": [0.0, 1.0, -1.0, 3.0],
+                "z": [0.0, 0.0, 0.0, 0.0],
+                "x_kf": [10.0, 20.0, 21.0, 40.0],
+                "y_kf": [0.0, 1.0, -1.0, 3.0],
+                "z_kf": [0.0, 0.0, 0.0, 0.0],
+                "heading": [0.0, 0.0, 0.0, 0.0],
+                "origin_heading": [0.0, 0.0, 0.0, 0.0],
+                "length": [4.0, 4.0, 1.0, 4.0],
+                "width": [2.0, 2.0, 0.6, 2.0],
+                "height": [1.5, 1.5, 1.7, 1.5],
+                "vx_rel": [0.0, 0.0, 0.0, 0.0],
+                "vy_rel": [0.0, 0.0, 0.0, 0.0],
+                "vz_rel": [0.0, 0.0, 0.0, 0.0],
+                "vx_abs": [0.0, 0.0, 0.0, 0.0],
+                "vy_abs": [0.0, 0.0, 0.0, 0.0],
+                "vz_abs": [0.0, 0.0, 0.0, 0.0],
+                "life_time": [1, 1, 1, 1],
+                "lost_time": [0, 0, 0, 0],
+                "object_timestamp": [1_000_000, 1_100_000, 1_100_000, 1_400_000],
+            }
+        )
+
+        near = nearest_objects_at_timestamp(df, 1_120_000, max_delta_us=50_000)
+        far = nearest_objects_at_timestamp(df, 1_250_000, max_delta_us=50_000)
+
+        self.assertEqual(near["object_id"].tolist(), [2, 3])
+        self.assertEqual(len(far), 0)
+
+    def test_object_footprint_xy_uses_center_heading_and_dimensions(self):
+        row = {
+            "x": 10.0,
+            "y": 1.0,
+            "x_kf": 10.0,
+            "y_kf": 1.0,
+            "heading": 0.0,
+            "length": 4.0,
+            "width": 2.0,
+        }
+
+        footprint = object_footprint_xy(row)
+
+        np.testing.assert_allclose(
+            footprint,
+            np.array([
+                [12.0, 2.0],
+                [12.0, 0.0],
+                [8.0, 0.0],
+                [8.0, 2.0],
+            ]),
+        )
+
+    def test_object_center_xy_converts_csd_axes_to_gui_ego_axes(self):
+        row = {
+            "x": 2.0,
+            "y": -12.0,
+            "x_kf": 3.0,
+            "y_kf": -14.0,
+        }
+
+        center = object_center_xy(row)
+
+        self.assertEqual(center, (14.0, -3.0))
+
+    def test_traffic_participants_draw_position_markers_without_direction_cues(self):
+        class Canvas:
+            def __init__(self):
+                self.calls = []
+
+            def create_oval(self, *args, **kwargs):
+                self.calls.append(("oval", args, kwargs))
+
+            def create_line(self, *args, **kwargs):
+                self.calls.append(("line", args, kwargs))
+
+            def create_polygon(self, *args, **kwargs):
+                self.calls.append(("polygon", args, kwargs))
+
+            def create_text(self, *args, **kwargs):
+                self.calls.append(("text", args, kwargs))
+
+        class Viewer(DrawBevMixin):
+            def __init__(self):
+                self.traj_canvas = Canvas()
+                self.bev_forward_scale = 10.0
+                self.bev_lateral_scale = 10.0
+                self.bev_origin = (100.0, 200.0)
+                self.show_objects_enabled = True
+                self.show_objects_var = None
+                self.current_objects = pd.DataFrame(
+                    {
+                        "object_id": [7],
+                        "object_type": [1],
+                        "x": [2.0],
+                        "y": [-10.0],
+                        "x_kf": [3.0],
+                        "y_kf": [-12.0],
+                        "heading": [1.57],
+                        "length": [4.5],
+                        "width": [1.8],
+                        "vx_rel": [3.0],
+                        "vy_rel": [0.0],
+                    }
+                )
+
+        viewer = Viewer()
+
+        viewer._draw_traffic_participants()
+
+        call_names = [name for name, _args, _kwargs in viewer.traj_canvas.calls]
+        self.assertEqual(call_names, ["oval"])
+        oval_args = viewer.traj_canvas.calls[0][1]
+        self.assertEqual(oval_args, (126.0, 76.0, 134.0, 84.0))
+        oval_kwargs = viewer.traj_canvas.calls[0][2]
+        self.assertEqual(oval_kwargs["tags"], ("traffic_object",))
+
+    def test_traffic_participants_project_to_fc_camera_when_enabled(self):
+        class Calibration:
+            image_width = 100
+            image_height = 80
+
+            def __init__(self):
+                self.projected_points = None
+
+            def project_bev_to_image(self, points):
+                self.projected_points = np.asarray(points, dtype=np.float64)
+                return (
+                    np.asarray([20.0], dtype=np.float64),
+                    np.asarray([30.0], dtype=np.float64),
+                    np.asarray([5.0], dtype=np.float64),
+                )
+
+            def is_point_visible(self, u, v, z):
+                return (u >= 0) & (v >= 0) & (z > 0)
+
+        class Viewer(DrawCameraMixin):
+            def __init__(self):
+                self.show_objects_enabled = True
+                self.show_objects_var = None
+                self.current_objects = pd.DataFrame(
+                    {
+                        "object_id": [7],
+                        "object_type": [1],
+                        "x": [2.0],
+                        "y": [-10.0],
+                        "x_kf": [3.0],
+                        "y_kf": [-12.0],
+                    }
+                )
+                self.calibration = {"FC": Calibration()}
+
+        viewer = Viewer()
+        image = np.zeros((80, 100, 3), dtype=np.uint8)
+
+        out = viewer._draw_traffic_participants_on_image(image, "FC")
+
+        np.testing.assert_allclose(viewer.calibration["FC"].projected_points, [[3.0, 12.0, 0.0]])
+        self.assertTrue(np.any(out[30, 20] > 0))
+        self.assertTrue(np.array_equal(out[0, 0], [0, 0, 0]))
+
+    def test_object_overlay_toggle_redraws_bev_and_camera_images(self):
+        class ToggleVar:
+            def get(self):
+                return False
+
+        class Viewer(DrawBevMixin):
+            def __init__(self):
+                self.show_objects_enabled = True
+                self.show_objects_var = ToggleVar()
+                self.bev_redraws = 0
+                self.camera_redraws = 0
+
+            def _draw_trajectories(self):
+                self.bev_redraws += 1
+
+            def _draw_camera_images(self):
+                self.camera_redraws += 1
+
+        viewer = Viewer()
+
+        viewer._toggle_object_overlay()
+
+        self.assertFalse(viewer.show_objects_enabled)
+        self.assertEqual(viewer.bev_redraws, 1)
+        self.assertEqual(viewer.camera_redraws, 1)
+
+    def test_viewer_shutdown_releases_tk_state_and_destroys_root(self):
+        class GrabWidget:
+            def __init__(self):
+                self.released = 0
+
+            def grab_release(self):
+                self.released += 1
+
+        class Root:
+            def __init__(self):
+                self.cancelled = []
+                self.quit_calls = 0
+                self.destroy_calls = 0
+                self.grab_widget = GrabWidget()
+
+            def after_cancel(self, after_id):
+                self.cancelled.append(after_id)
+
+            def grab_current(self):
+                return self.grab_widget
+
+            def quit(self):
+                self.quit_calls += 1
+
+            def destroy(self):
+                self.destroy_calls += 1
+
+        class Tooltip:
+            def __init__(self):
+                self.destroy_calls = 0
+
+            def destroy(self):
+                self.destroy_calls += 1
+
+        viewer = TrajectoryViewerEnhanced.__new__(TrajectoryViewerEnhanced)
+        viewer.root = Root()
+        viewer._resize_after_id = "resize-1"
+        viewer.traj_list_tooltip = Tooltip()
+        viewer.drag_state = {"type": "manual_control"}
+        viewer.draw_line_enabled = True
+
+        viewer._shutdown_gui()
+        viewer._shutdown_gui()
+
+        self.assertTrue(viewer._closing)
+        self.assertIsNone(viewer._resize_after_id)
+        self.assertEqual(viewer.root.cancelled, ["resize-1"])
+        self.assertEqual(viewer.root.grab_widget.released, 1)
+        self.assertEqual(viewer.root.quit_calls, 1)
+        self.assertEqual(viewer.root.destroy_calls, 1)
+        self.assertIsNone(viewer.traj_list_tooltip)
+        self.assertIsNone(viewer.drag_state)
+        self.assertFalse(viewer.draw_line_enabled)
+
+    def test_window_resize_callback_ignores_events_after_shutdown_starts(self):
+        class Root:
+            def __init__(self):
+                self.cancelled = []
+                self.after_calls = []
+
+            def after_cancel(self, after_id):
+                self.cancelled.append(after_id)
+
+            def after(self, delay_ms, callback):
+                self.after_calls.append((delay_ms, callback))
+                return "new-after-id"
+
+        class Event:
+            def __init__(self, widget):
+                self.widget = widget
+
+        viewer = TrajectoryViewerEnhanced.__new__(TrajectoryViewerEnhanced)
+        viewer.root = Root()
+        viewer._closing = True
+        viewer._resize_after_id = "old-after-id"
+
+        viewer._on_window_configure(Event(viewer.root))
+
+        self.assertEqual(viewer.root.cancelled, [])
+        self.assertEqual(viewer.root.after_calls, [])
+        self.assertEqual(viewer._resize_after_id, "old-after-id")
+
     def test_responsive_layout_scales_down_for_small_windows_screens(self):
         layout = compute_responsive_layout(1366, 768)
 
@@ -247,6 +541,14 @@ class GuiHelperTests(unittest.TestCase):
         self.assertLess(layout.camera_fc_height, 720)
         self.assertGreaterEqual(layout.bev_canvas_width, 400)
         self.assertTrue(layout.start_maximized)
+
+    def test_responsive_layout_keeps_bottom_controls_visible_on_laptop_height(self):
+        layout = compute_responsive_layout(1366, 768)
+
+        visual_stack_height = layout.bev_canvas_height + 2 * layout.speed_canvas_height
+
+        self.assertLessEqual(visual_stack_height, 480)
+        self.assertLessEqual(layout.camera_fc_height + layout.camera_aux_height, 520)
 
     def test_responsive_layout_keeps_full_visual_size_on_large_screens(self):
         layout = compute_responsive_layout(2560, 1440)

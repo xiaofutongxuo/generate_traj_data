@@ -29,11 +29,14 @@ from traj_core.cluster_utils import *
 class WidgetLayoutMixin:
 
     def _create_scrollable_main_frame(self, bg_color: str):
-        # We no longer use a scrollable frame so that the layout can truly be responsive and fill the screen.
+        # Use a fixed root-sized frame; its direct children use grid rows so
+        # the bottom controls remain visible when the visual content shrinks.
         main_frame = tk.Frame(self.root, bg=bg_color)
         main_frame.pack(fill=tk.BOTH, expand=True)
         content_pad = getattr(self, "responsive_content_pad", 12)
         main_frame.configure(padx=content_pad, pady=content_pad)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(1, weight=1)
         self.main_scroll_frame = main_frame
         return main_frame
 
@@ -60,7 +63,7 @@ class WidgetLayoutMixin:
 
         # --- Top Header Bar ---
         header_frame = tk.Frame(main_frame, bg=BG_PANEL, relief=tk.FLAT, bd=0)
-        header_frame.pack(fill=tk.X, pady=(0, 10))
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         title_frame = tk.Frame(header_frame, bg=BG_PANEL)
         title_frame.pack(fill=tk.X, padx=10, pady=8)
@@ -141,7 +144,7 @@ class WidgetLayoutMixin:
 
         # --- Content Area ---
         content_frame = tk.Frame(main_frame, bg=BG_MAIN)
-        content_frame.pack(fill=tk.BOTH, expand=True)
+        content_frame.grid(row=1, column=0, sticky="nsew")
 
         horizontal_paned = ttk.PanedWindow(content_frame, orient=tk.HORIZONTAL)
         horizontal_paned.pack(fill=tk.BOTH, expand=True)
@@ -150,7 +153,28 @@ class WidgetLayoutMixin:
         left_frame = tk.Frame(horizontal_paned, bg=BG_PANEL)
         horizontal_paned.add(left_frame, weight=3)
 
-        tk.Label(left_frame, text="Bird's Eye View", font=("Segoe UI", 12, "bold"), fg=FG_PRIMARY, bg=BG_PANEL).pack(pady=(10, 5))
+        bev_header = tk.Frame(left_frame, bg=BG_PANEL)
+        bev_header.pack(fill=tk.X, padx=10, pady=(10, 5))
+        tk.Label(
+            bev_header,
+            text="Bird's Eye View",
+            font=("Segoe UI", 12, "bold"),
+            fg=FG_PRIMARY,
+            bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+        self.show_objects_var = tk.BooleanVar(value=bool(getattr(self, "show_objects_enabled", True)))
+        tk.Checkbutton(
+            bev_header,
+            text="交通参与者",
+            variable=self.show_objects_var,
+            command=self._toggle_object_overlay,
+            bg=BG_PANEL,
+            fg=FG_SECONDARY,
+            selectcolor=BG_MAIN,
+            activebackground=BG_PANEL,
+            activeforeground=FG_PRIMARY,
+            font=("Segoe UI", 9),
+        ).pack(side=tk.RIGHT)
 
         self.traj_canvas = tk.Canvas(
             left_frame, width=self.bev_canvas_width, height=self.bev_canvas_height,
@@ -341,14 +365,24 @@ class WidgetLayoutMixin:
 
         # --- Bottom Control Panels ---
         controls_outer_frame = tk.Frame(main_frame, bg=BG_MAIN)
-        controls_outer_frame.pack(fill=tk.X, pady=(10, 0))
+        controls_outer_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        controls_outer_frame.grid_columnconfigure(0, weight=1)
+        compact_controls = bool(
+            getattr(getattr(self, "responsive_layout", None), "window_width", 1900) < 1700
+        )
 
-        control_font = ("Segoe UI", 10, "bold")
-        btn_padx, btn_pady = 12, 6
+        control_font = ("Segoe UI", 9 if compact_controls else 10, "bold")
+        btn_padx, btn_pady = (8, 4) if compact_controls else (12, 6)
+
+        def place_control_group(widget, row: int, is_last: bool = False):
+            if compact_controls:
+                widget.grid(row=row, column=0, sticky="w", pady=(0, 4 if not is_last else 0))
+            else:
+                widget.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10 if not is_last else 0))
 
         # Group 1: Drawing & Bezier Tools
         draw_group = ttk.LabelFrame(controls_outer_frame, text="Drawing & Bezier Tools", style="Dark.TLabelframe")
-        draw_group.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        place_control_group(draw_group, 0)
         draw_inner = tk.Frame(draw_group, bg=BG_PANEL)
         draw_inner.pack(padx=8, pady=8)
 
@@ -379,7 +413,7 @@ class WidgetLayoutMixin:
 
         # Group 2: Trajectory Editing
         edit_group = ttk.LabelFrame(controls_outer_frame, text="Trajectory Editing", style="Dark.TLabelframe")
-        edit_group.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        place_control_group(edit_group, 1)
         edit_inner = tk.Frame(edit_group, bg=BG_PANEL)
         edit_inner.pack(padx=8, pady=8)
 
@@ -390,7 +424,7 @@ class WidgetLayoutMixin:
 
         # Group 3: GT & Global Actions
         action_group = ttk.LabelFrame(controls_outer_frame, text="GT & Global Actions", style="Dark.TLabelframe")
-        action_group.pack(side=tk.LEFT, fill=tk.Y)
+        place_control_group(action_group, 2, is_last=True)
         action_inner = tk.Frame(action_group, bg=BG_PANEL)
         action_inner.pack(padx=8, pady=8)
 
@@ -405,7 +439,7 @@ class WidgetLayoutMixin:
 
         # --- Status & Help ---
         footer_frame = tk.Frame(main_frame, bg=BG_MAIN)
-        footer_frame.pack(fill=tk.X, pady=(10, 0))
+        footer_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
         self.status_label = tk.Label(footer_frame, text="", font=("Segoe UI", 10), fg=FG_SECONDARY, bg=BG_MAIN)
         self.status_label.pack(side=tk.LEFT)
@@ -570,6 +604,8 @@ class WidgetLayoutMixin:
 
     def _on_window_configure(self, event):
         """Debounce window resize events; only fire when the root window itself changes."""
+        if getattr(self, "_closing", False):
+            return
         if event.widget is not self.root:
             return
         if hasattr(self, '_resize_after_id') and self._resize_after_id is not None:
@@ -581,6 +617,8 @@ class WidgetLayoutMixin:
         attributes and triggers a single full redraw.  Safe: only root <Configure>
         fires this, not canvas/label drawing operations.
         """
+        if getattr(self, "_closing", False):
+            return
         self._resize_after_id = None
 
         # Update BEV canvas dimensions from the actual rendered widget size

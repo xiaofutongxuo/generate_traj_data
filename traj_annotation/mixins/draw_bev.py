@@ -18,6 +18,7 @@ setup_environment()
 
 from traj_core.data_loader import get_dataset_names, get_clip_stems_from_dataset, load_data, get_t0_candidates
 from traj_core.calibration_loader import load_calibration_for_segment
+from traj_core.object_loader import object_center_xy
 from traj_core.visualization import draw_trajectory_on_image, ego_to_bev_points, load_image_from_frame
 
 from traj_core.constants import *
@@ -42,6 +43,59 @@ class DrawBevMixin:
         lateral_scale = self.bev_lateral_scale if scale is None else scale
         offset = self.bev_origin if offset is None else offset
         return (offset[1] - cy) / forward_scale, (offset[0] - cx) / lateral_scale
+
+    def _toggle_object_overlay(self):
+        var = getattr(self, "show_objects_var", None)
+        self.show_objects_enabled = bool(var.get()) if var is not None else not bool(
+            getattr(self, "show_objects_enabled", True)
+        )
+        if hasattr(self, "_draw_trajectories"):
+            self._draw_trajectories()
+        if hasattr(self, "_draw_camera_images"):
+            self._draw_camera_images()
+
+    def _traffic_object_color(self, object_type: int) -> str:
+        if object_type in {1, 2, 3, 4}:
+            return "#ffd166"
+        if object_type in {5, 6, 7, 8}:
+            return "#f8961e"
+        return "#8ecae6"
+
+    def _draw_traffic_participants(self):
+        """Draw traffic participants from data-objects parquet on BEV."""
+        var = getattr(self, "show_objects_var", None)
+        if var is not None:
+            enabled = bool(var.get())
+        else:
+            enabled = bool(getattr(self, "show_objects_enabled", True))
+        if not enabled:
+            return
+
+        objects_df = getattr(self, "current_objects", None)
+        if objects_df is None or len(objects_df) == 0:
+            return
+
+        for _, row in objects_df.iterrows():
+            try:
+                center_x, center_y = object_center_xy(row)
+            except Exception:
+                continue
+            if not (np.isfinite(center_x) and np.isfinite(center_y)):
+                continue
+            object_type = int(row.get("object_type", 0) or 0)
+            color = self._traffic_object_color(object_type)
+            center_px, center_py = self._world_to_canvas(center_x, center_y)
+            radius = 4
+            self.traj_canvas.create_oval(
+                center_px - radius,
+                center_py - radius,
+                center_px + radius,
+                center_py + radius,
+                fill=color,
+                outline="#111111",
+                width=1,
+                tags=("traffic_object",),
+            )
 
     def _draw_bev_grid(self):
         """Draw a meter grid and ego axes on the BEV canvas."""
@@ -447,6 +501,7 @@ class DrawBevMixin:
         self._draw_bev_grid()
         self._draw_history_trajectory()
         self._draw_gt_future_trajectory()
+        self._draw_traffic_participants()
         self._draw_manual_bezier_preview()
 
         if not self.trajectories:

@@ -53,22 +53,31 @@ def compute_responsive_layout(screen_width: int, screen_height: int) -> Responsi
     min_width = min(900, window_width)
     min_height = min(620, window_height)
 
+    compact_height = window_height < 900
     width_scale = clamp_float(window_width / 1900.0, 0.74, 1.0)
     height_scale = clamp_float(window_height / 1150.0, 0.60, 1.0)
     visual_scale = clamp_float(min(width_scale, height_scale), 0.60, 1.0)
+    if compact_height:
+        # Reserve vertical room for the header, bottom action buttons, status
+        # footer, and internal panel labels.  Without this extra compression,
+        # 768px-tall Windows laptop screens can push the bottom controls below
+        # the visible window.
+        visual_stack_budget = max(310.0, window_height - 250.0)
+        stack_scale = visual_stack_budget / (700.0 + 2.0 * 180.0)
+        visual_scale = min(visual_scale, clamp_float(stack_scale, 0.32, 1.0))
 
     bev_canvas_width = clamp_int(560 * visual_scale, 400, 560)
-    bev_canvas_height = clamp_int(700 * visual_scale, 420, 700)
+    bev_canvas_height = clamp_int(700 * visual_scale, 240 if compact_height else 420, 700)
     speed_canvas_width = bev_canvas_width
-    speed_canvas_height = clamp_int(180 * visual_scale, 115, 180)
+    speed_canvas_height = clamp_int(180 * visual_scale, 64 if compact_height else 115, 180)
     bev_forward_scale = 6.2 * bev_canvas_height / 700.0
     bev_lateral_scale = 10.0 * bev_canvas_width / 560.0
     bev_origin_bottom_margin = clamp_int(65 * visual_scale, 40, 65)
 
-    camera_fc_height = clamp_int(720 * visual_scale, 430, 720)
-    camera_aux_height = clamp_int(300 * visual_scale, 180, 300)
-    camera_fc_height_many = clamp_int(600 * visual_scale, 360, 600)
-    camera_aux_height_many = clamp_int(240 * visual_scale, 145, 240)
+    camera_fc_height = clamp_int(720 * visual_scale, 300 if compact_height else 430, 720)
+    camera_aux_height = clamp_int(300 * visual_scale, 120 if compact_height else 180, 300)
+    camera_fc_height_many = clamp_int(600 * visual_scale, 260 if compact_height else 360, 600)
+    camera_aux_height_many = clamp_int(240 * visual_scale, 100 if compact_height else 145, 240)
 
     right_panel_width = clamp_int(window_width * 0.24, 340, 460)
     trajectory_listbox_width = clamp_int(right_panel_width / 8.5, 40, 56)

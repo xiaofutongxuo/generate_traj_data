@@ -54,8 +54,11 @@ train_data/
     ├── data-timestamps/
     │   ├── {clip}.timestamps.parquet
     │   └── {clip}_fovs_{CAM}.timestamps.parquet
+    ├── data-objects/
+    │   └── {clip}.objects.parquet
     ├── mp4-converted/
     │   └── {clip}_fovs_{CAM}.mp4
+    ├── Vision_calibration.tar.gz
     └── calibration/
         ├── fc120/
         │   ├── cameraIntrinsic.xml
@@ -72,6 +75,8 @@ train_data/
 ```
 
 这样就只需要 FC 对应的视频和时间戳。
+
+`data-objects/` 是交通参与者数据目录。没有它也能标注；有它的话，GUI 会在 BEV 和 FC 前视画面里用点标出其他车、行人等交通参与者的位置，更方便判断扩充轨迹有没有碰撞风险。
 
 ### 2.3 标注输出目录：`--output_dir`
 
@@ -120,7 +125,23 @@ calibration/
 - 有 `train_data/{dataset}/calibration/`：基本够用。
 - 没有本地 calibration：必须给 `--calibration_dir` 指向旧 JSONL 标定目录。
 
-### 2.5 可选：场景类别文件
+### 2.5 可选：交通参与者数据
+
+如果需要在 BEV 里看交通参与者，需要提前从原始 `.csd` 提取：
+
+```text
+train_data/{dataset_name}/data-objects/{clip}.objects.parquet
+```
+
+这个文件一般由 `data_processed_tool` 生成，不需要标注人员自己手写。里面每一行是某一帧的一个交通参与者，包含位置、朝向、长宽高、速度等信息。
+
+简单理解：
+
+- 没有 `data-objects/`：GUI 正常打开，只是不显示交通参与者。
+- 有 `data-objects/`：BEV 顶部勾选 `交通参与者` 后，BEV 和 FC 前视画面会同时显示交通参与者的位置点；取消勾选后两边一起隐藏。
+- 标注同事不需要拿原始 `.csd`，只需要拿转换好的 parquet。
+
+### 2.6 可选：场景类别文件
 
 如果想按场景类别筛选样本，可以在数据集目录下放：
 
@@ -323,13 +344,14 @@ GUI 打开后可以按这个顺序看：
 - 真实 GT 是参考，不会写回 output。
 - 右侧列表里的非 GT 轨迹是可以删除、编辑、保存的伪 GT。
 - 如果某条轨迹速度不平滑，列表里会有异常标记，BEV 上也更容易看出问题。
+- 如果提供了 `data-objects/`，左侧 BEV 顶部可以勾选 `交通参与者`，BEV 和 FC 前视画面会同时显示其他交通参与者的位置点。
 
 ## 6. 推荐标注流程
 
 建议每个样本按这个流程走：
 
 1. 选中一个 Dataset、Clip、t0。
-2. 看相机图和 BEV，确认这个时刻是否正常。
+2. 看相机图和 BEV，确认这个时刻是否正常；如果有交通参与者显示，顺便看一下是否有明显碰撞风险。
 3. 看右侧已有伪 GT 轨迹。
 4. 明显不合理的轨迹先标记删除。
 5. 如果轨迹种类不够，选择一种方式补轨迹：
@@ -424,7 +446,7 @@ GUI 打开后可以按这个顺序看：
 简单看法：
 
 - 曲线很尖、突然跳起来，通常不太好。
-- 轨迹显示停车时，BEV 和 FC 图里会出现红点。
+- 轨迹显示停车时，BEV 和 FC 图里会出现红点；这是停车段提示，不是交通参与者。
 - 如果有 `优化速度曲线` 按钮，可以对当前伪 GT 做一次速度平滑和重采样。
 
 速度优化一般流程：
@@ -489,7 +511,8 @@ output/
 2. train_data 原始数据目录
 3. output 伪 GT parquet 目录
 4. calibration 标定目录，或 train_data/{dataset}/calibration/
-5. Python 3.10/3.11 + requirements.txt 里的 GUI 依赖
+5. 可选：train_data/{dataset}/data-objects/ 交通参与者 parquet
+6. Python 3.10/3.11 + requirements.txt 里的 GUI 依赖
 ```
 
 启动时只需要传：
@@ -541,7 +564,17 @@ python trajectory_annotator.py \
 - 如果没有本地 XML 标定，`--calibration_dir` 是否指向旧 JSONL 标定目录。
 - dataset 名和标定文件名是否能对应上。
 
-### 15.4 保存失败
+### 15.4 BEV 或 FC 里没有交通参与者
+
+先检查：
+
+- 数据集目录下是否有 `data-objects/{clip}.objects.parquet`。
+- 当前 `t0` 附近是否有对应的 object 时间戳。
+- 左侧 BEV 顶部的 `交通参与者` 是否被勾选。这个开关会同时控制 BEV 和 FC 前视画面里的交通参与者位置点。
+
+没有 `data-objects/` 不影响轨迹标注，只是少了碰撞风险辅助参考。
+
+### 15.5 保存失败
 
 检查：
 
@@ -550,7 +583,7 @@ python trajectory_annotator.py \
 - Windows 上路径是否过长或包含奇怪字符。
 - 多个人是否同时在写同一个 output。
 
-### 15.5 不小心删错或保存错
+### 15.6 不小心删错或保存错
 
 可以先看：
 
@@ -561,7 +594,7 @@ python trajectory_annotator.py \
 
 恢复前建议先复制一份当前 output，避免二次误操作。
 
-### 15.6 屏幕比较小，按钮或面板显示不全
+### 15.7 屏幕比较小，按钮或面板显示不全
 
 新版 GUI 会根据屏幕大小自动缩放 BEV、速度曲线、相机图和右侧列表。Windows 小屏上会尽量自动最大化窗口。
 
@@ -584,6 +617,7 @@ python trajectory_annotator.py \
 
 ```text
 准备 train_data、output、calibration；
+有条件的话准备 data-objects；
 安装 requirements.txt；
 运行 trajectory_annotator.py；
 逐帧检查已有伪 GT；
